@@ -1,0 +1,26 @@
+# Dirs only (200k)
+
+Sort:
+  * find = whatever find returns (DFS dentry ordering)
+  * (B) split into blocks between workers instd. of interleaving
+
+Lang  Workers  Sort
+Py    8        find(B)         4:23
+Py    128      find(B)         4:55
+Py    1        ino             1:17
+Py    128      ino(B)          3:30
+Py    16       ino             1:58
+Py    4        ino(B)          2:07
+Py    2        ino(B)          1:41
+
+
+# Files only (~2M)
+
+find            find            4:00
+Py      1       ino             2:50
+read_raw_inodes                 2:20
+
+# Inotify watches
+
+stat time + a few seconds
+85MB kernel memory (for 200k directories)

@@ -1,0 +1,36 @@
+Název: Nástroj pro decentralizovanou synchronizaci souborů
+       (A decentralized file synchronization tool)
+
+## Zásady pro vypracování
+
+Cílem práce je navrhnout a implementovat nástroj pro synchronizaci souborů mezi
+více počítači. Základní funkčností bude obdobný komerčním řešením, jako např.
+Dropbox. Narozdíl od většiny z nich by měl být otevřený (bez vazby na
+konkrétního poskytovatele služeb, s možností provozovat vše na vlastním
+serveru), decentralizovaný a distribuovaný (libovolné počítače se mohou vzájemně
+synchronizovat, pokud dokáží navázat síťové spojení; žádný nemá speciální roli).
+Dále by měl být kladen důraz na vysokou konfigurovatelnost, bezpečnost
+(šifrování dat při přenosu i na úložištích) a efektivitu (zejména v typické
+situaci, kdy úložitě obsahuje velké soubory a/nebo velký počet souborů, které se
+ale mění jen málo).
+
+## Seznam odborné literatury
+
+Tridgell, A., Mackerras, P., et al. The rsync algorithm. 1996. Dostupné z:
+<https://digitalcollections.anu.edu.au/bitstream/1885/40765/3/TR-CS-96-05.pdf>.
+
+Pierce, Benjamin C. and Vouillon, Jerome. What's in Unison? A Formal
+Specification and Reference Implementation of a File Synchronizer. 2004.
+Technical Reports (CIS), paper 40. Dostupné z:
+<http://repository.upenn.edu/cis_reports/40>.
+
+CHACON, Scott, STRAUB, Ben. Pro Git. Apress, 2014. Dostupné z:
+<https://git-scm.com/book/en/v2>.
+
+Man pages for git [online]. Dostupné z: https://www.kernel.org/pub/software/scm/git/docs/
+
+Git-annex [online]. Dostupné z: https://git-annex.branchable.com/
+
+OwnCloud [online]. Dostupné z: https://owncloud.org/
+
+Bup - very efficient backup system based on the git packfile format [online]. Dostupné z: https://bup.github.io/

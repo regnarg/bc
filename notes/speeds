@@ -1,0 +1,12 @@
+## Transfer speeds
+
+Synology gigabit SFTP r/w           6 MB/s
+Synology gigabit SMB write         30 MB/s
+Synology gigabit SMB read          45 MB/s
+rsync hdd to hdd (over Orico)  50-100 MB/s
+
+## Tree stat times
+
+terrier/data (2M files) clean cache  3:55
+terrier/data (2M files) full cache   1:06
+(over Orico USB3 box, shouldn't matter)

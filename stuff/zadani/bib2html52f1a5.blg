@@ -1,0 +1,48 @@
+This is BibTeX, Version 0.99d (TeX Live 2015/Arch Linux)
+Capacity: max_strings=35307, hash_size=35307, hash_prime=30011
+The top-level auxiliary file: bib2html52f1a5.aux
+The style file: csplainnat/csplainnat.bst.bst
+Database file #1: zadani.bib
+Warning--empty journal in tridgell1996rsync
+You've used 1 entry,
+            2898 wiz_defined-function locations,
+            626 strings with 5224 characters,
+and the built_in function-call counts, 481 in all, are:
+= -- 36
+> -- 30
+< -- 0
++ -- 10
+- -- 9
+* -- 44
+:= -- 88
+add.period$ -- 4
+call.type$ -- 1
+change.case$ -- 3
+chr.to.int$ -- 1
+cite$ -- 3
+duplicate$ -- 23
+empty$ -- 34
+format.name$ -- 13
+if$ -- 89
+int.to.chr$ -- 1
+int.to.str$ -- 1
+missing$ -- 1
+newline$ -- 14
+num.names$ -- 5
+pop$ -- 11
+preamble$ -- 1
+purify$ -- 3
+quote$ -- 0
+skip$ -- 16
+stack$ -- 0
+substring$ -- 2
+swap$ -- 3
+text.length$ -- 0
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 11
+warning$ -- 1
+while$ -- 3
+width$ -- 0
+write$ -- 20
+(There was 1 warning)

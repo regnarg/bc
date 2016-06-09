@@ -1,0 +1,5 @@
+Defaults:
+
+block size: 4096
+blocks per group: 32768
+-> block group size 128 MB (8 per 1GB)
