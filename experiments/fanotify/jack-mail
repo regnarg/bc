@@ -1,0 +1,259 @@
+Subject: RFC: Rozšíření fanotify (FAN_MODIFY_DIR)
+
+Dobrý den,
+
+jako jeden z podúkolů v rámci své bakalářky na MFF UK řeším rozšíření fanotify o
+schopnost nějakým způsobem reportovat rename, unlink a další "strukturální
+změny" filesystému. Mám navržené řešení a můj vedoucí, Martin Mareš, mi
+doporučil nejdříve se obrátit na Vás jakožto znalce linuxového VFS subsystému,
+než se budu pokoušet něco řešit v divokých vodách LKML.
+
+Pokud máte chvilku, budu rád za Váš názor, jestli navržené řešení dává smysl,
+případně jestli má alespoň hypotetickou šanci na začlenění.
+
+## Proč?
+
+Dost často si nějaké aplikace potřebují udržovat nějakou vnitřní reprezentaci
+aktuální podoby nějakého adresářového stromu a průběžně ji aktualizovat. V mém
+případě jde o nástroj na synchronizaci souborů, ale podobné požadavky mají třeba
+indexovací/desktop search nástroje.  Je to i na "kernel wishlistu" vývojářů
+GNOME: https://wiki.gnome.org/BastienNocera/KernelWishlist
+
+Aktuálně jediným řešením je vytvořit inotify watch rekurzivně pro každý adresář,
+což trvá dlouho a žere paměť (kromě samotného watche ještě inode, který nejde
+vyhodit z cache).
+
+## Jak?
+
+Navržené řešení přidává nový druh události FAN_MODIFY_DIR, která je vyvolána při
+jakékoli změně obsahu adresáře (kde obsah adresáře je chápán jako slovník jméno
+-> inode). V příloze je velmi jednoduchý patch (proti linux-4.5), který tuto
+událost implementuje. Userspace aplikace v tuto chvíli můžou prostě přeskenovat
+celý obsah adresáře a začlenit nalezené změny.
+
+Součástí události je file deskriptor na změněný adresář, což umožní aplikaci
+změnu korektně zpracovat i když mezitím byl změněný adresář (či některý z jeho
+nadřazených adresářů) přejmenován.
+
+Aby tohle fungovalo, musí aplikace umět dohledat nějakou vnitřní reprezentaci
+adresářového inodu odpovídajícího danému file deskriptoru. Přirozeně se nabízí
+použít číslo inode, ale to můž být na většině filesystémů zrecyklováno. Více o
+tomto problému níže, prozatím předpokládejme, že máme k dispozici pro každý
+inode jednoznačný, stabilní a nerecyklovaný identifikátor, kterému budeme říkat
+IID. Ten použijeme nejen pro určení změněného adresáře, ale také pro párování
+zdroje a cíle přejmenování, případně určení smazaného objektu (podíváme se,
+která IID v adresáři byla a už nejsou).
+
+S tímto předpokladem může userspace aplikace použít následující jednoduchý
+algoritmus, aby si spolehlivě udržovala reprezentaci aktuálního stavu
+filesystému.
+
+Stav algoritmu: seznam inode objektů. U každého si pamatujeme IID, basename a
+rodiče (případně množinu dvojic (rodič,basename), pokud chceme podporovat
+hardlinky) a u adresářů mapování basename -> dceřiný objekt.  Udržujeme si index
+objektů podle IID pro rychlé vyhledávání.
+
+1. Začneme zachytávat fanotify události pro daný vfsmount (FAN_MODIFY_DIR
+   + cokoli dalšího, co nás zajímá). Pokud skenování trvá déle, je třeba
+   je zachytávat a kešovat, aby nepřetekla kernelová fronta. Alternativně
+   lze skenování udělat thread-safe a zpracovávat události už během něj.
+2. Načteme celý adresářový strom a vytvoříme reprezentaci popsanou
+   výše. K tomu poslouží jednoduchá rekurzivní funkce Scan:
+
+   Scan(dirfd, recursive):
+       dirobj = lookup_obj(IID(dirfd)) # vytvoří nový objekt, pokud žádný neexistuje
+       for basename in readdir(dirfd):
+           iid = IID(<dirfd>/<basename>)
+           obj = lookup_obj(iid)
+           if basename in dirobj.children: # Jméno, které v adresáři už bylo předtím
+               oldobj = dirobj.children[basename]
+               if oldobj.iid == iid:
+                   # Pod stejným názvem stejný inode, tady se nic nezměnilo.
+               else:
+                   # Stejný název ukazuje na jiný inode -> předpokládáme
+                   # nahrazení.
+                   UnlinkObj(dirobj, basename)
+           else: # Nové jméno v daném adresáři
+               if recursive and is_dir(obj):
+                   scan recursively
+              LinkObj(dirobj, basename, obj)
+       for each basename in dirobj.children that was not seen during readdir:
+           UnlinkObj(dirobj, dirobj.children[basename])
+
+   LinkObj(dirobj, basename, obj):
+       dirobj.children[basename] = obj
+       obj.links.add((dirobj, basename))
+   UnlinkObj(dirobj, basename):
+       obj = dirobj.children[basename]
+       remove dirobj.children[basename]
+       obj.links.remove((dirobj, basename))
+       # Pokud jsme odstranili poslední odkaz na daný objekt, může a nemusí to
+       # znamenat, že příslušný inode byl smazán. Mohlo se prostě stát, že
+       # cílový adresář přejmenování jsme přeskenovali dřív než zdrojový.
+       # Nejjednodušší je naplánovat si pročištění inode třeba minutu po smazání
+       # posledního odkazu, ale jsou i další možnosti, viz níže.
+
+3. Zpracováváme události od fanotify (včetně těch zachycených během skenování).
+   Kdykoli dostaneme FAN_MODIFY_DIR, zavoláme na příslušný FD znovu funkci
+   Scan, jen tentokrát bez rekurzivního kroku. Jiné události (např. FAN_MODIFY)
+   zpracujeme přímočaře: podle FD dohledáme IID a správný objekt), zpracujeme
+   obsah souboru a aktualizujeme data v našem objektu.
+
+Takto máme zaručeno, že kdykoli se obsah nějakého adresáře změní, dojde
+k přeskenování správného adresáře a aktualizaci našeho modelu.
+
+Vnitřní stav je možné uchovávat napříč remounty/rebooty, za předpokladu,
+že IID jsou stabilní napříč remounty/rebooty.
+
+Ukázková userspace implementace je přiložena v souboru fanotify_model.cpp.
+Též je přiložen jednoduchý stress testovací skript (parallel_renamist.sh),
+který vytvoří hierarchii 10 vnořených adresářů a na všech úrovních zároveň
+je neustále přejmenovává.
+
+## Problémy
+
+# Jak identifikovat inody?
+
+Existuje několik možností:
+
+  * Pomocí nerecyklovaného čísla inode. Některé filesystémy (tmpfs, za běžných
+    okolností btrfs) přidělují čísla inodů sekvenčně a nerecyklují je. Ta se
+    pak dají použít jako IID.
+
+  * Pomocí čísla inode a čísla generace. Mnoho běžných filesystémů používá
+    interně generační čísla, ale ne všechny umožňují jejich přečtení pomocí
+    FS_IOC_GETVERSION. Navíc, pro zavolání ioctl musíme mít otevřený soubor,
+    což není praktickés (O_PATH file deskriptor nestačí).
+
+  * Pomocí filehandle. Pomocí name_to_handle_at získáme string identifikující
+    daný inode (který pak můžeme navíc použít pro otevření daného inodu).
+    Využívá to operace původně určené pro NFS, takže to funguje jen na
+    exportovatelných filesystémech (ale to většina běžných je... dokonce i
+    NTFS!) NFS specifikace obecně negarantuje stabilitu filehandles (můžu
+    dostat pokaždé jiný string, i když všechny reprezentují stejný inode),
+    jen ji vřele doporučuje a většina běžných filesystémů ji dodržuje (protože
+    handle je jen zakódované číslo inode a generace).
+    
+    U takových můžeme filehandly přímo použít jako IID. Pokud si uložíme
+    filehandle, můžeme navíc vždycky spolehlivě a bez race conditions
+    přistupovat k tomu správnému inode, ke kterému se vztahuje naše interní
+    reprezentace (např. pokud řeším synchronizaci souborů, mám uložená nějaká
+    metadata o souborech a když přijde čas vyměnit si samotná data, prostě
+    ho jen otevřu pomocí handle a vím, že mám ten správný). Vůbec to otvírá
+    svět nových a pozoruhodných možností, daleko nad rámec původního záměru
+    userspace NFS serverů.
+
+  * Pomocí čísla inode a filehandle. Kombinace předchozích přístupů, která
+    funguje u exportovatelných filesystémů, i když nemají stabilní filehandles.
+    Trik je v tom, že jako klíč pro vyhledávání v hešovacích tabulkách použijeme
+    číslo inode, které je stabilní. Navíc máme u každého objektu uložený handle,
+    který použijeme pro ověření, že je to pořád ten samý inode a nejen recyklace
+    stejného čísla. Pokud se handly stringově rovnají, máme vyhráno. Jinak stačí
+    ten starý zkusit otevřít (open_by_handle_at), a pokud nedostaneme ESTALE,
+    znamená to, že původní inode stále existuje a jeho číslo nebylo
+    zrecyklováno (ani se nemusíme namáhat s fstatem). Tato varianta je
+    implementovaná v userspace POC kódu.
+
+Pro ostatní situace (neexportovatelné filesystémy recyklující čísla inodes či
+dokonce filesystémy s nestabilními čísly inodes se asi nic rozumného udělat
+nedá. Ale tento problém se netýká jen fanotify, úplně stejně narazíme, když
+budeme chtít detekovat přejmenování offline (mezi dvěma kompletními skeny
+adresářového stromu).
+
+# Neatomické skenování
+
+Skenování adresářů skrývá mnohé zádrhely:
+
+  * Race conditions mezi jednotlivými voláními readdir/getdents, které mohou
+    způsobit například, že během přejmenovávání nepotkám ani staré, ani nové
+    jméno: http://yarchive.net/comp/linux/readdir_nonatomicity.html
+    Lze jim částečně předejít getdents s velkým bufferem, ale možná to ani
+    není potřeba.
+
+  * Race conditions mezi readdir a dalším zpracováním (open, stat, etc.).
+    Většinu z nich lze zdetekovat změnou st_ino oproti d_ino.
+
+Ve skutečnosti tohle ale vůbec není problém specifický pro fanotify.
+Úplně stejné problémy můžou nastat i při prvotním skenování celého stromu či
+manuálním přeskenování, jen je to méně pravděpodobné.
+
+Co s tím:
+
+  * Prevence. Protože více změn jednoho adresáře se často děje pohromadě,
+    po obdržení FAN_MODIFY_DIR pro nějaký adresář chvilku počkáme, jestli
+    nepřijde další. Teprve nějaký (nejlépe náhodný) čas po poslední obdržené
+    události (s nějakým stropem na maximální celkové čekání) spustíme
+    přeskenování adresáře.
+  * Detekce. Pokud je adresář změněn během našeho skenování, dozvíme se
+    o tom, protože dostaneme další FAN_NOTIFY_DIR, což si můžeme na konci
+    skenu ověřit. Daly by se použít i heuristiky popsané výše, ale asi to
+    není potřeba.
+
+# Overhead
+
+  * Nutnost přečíst celý adresář. S tou v takovémto návrhu mnoho nezmůžeme.
+    Alternativy jsou diskutovány níže.
+
+  * Spousta syscallů pro každou přečtenou položku při skenování. V případě
+    použití ino+handle IIDs minimálně openat/O_PATH, name_to_handle_at
+    a fstat pro každou včetně nezměněných. Tohle se dá zachránit velmi
+    jednoduchou a silnou heuristikou. Pokud objevíme v daném adresáři
+    již známou (podle basename) položku, podíváme se na d_ino. Pokud se
+    shoduje s uloženým číslem inode, považujeme jméno za nezměněné a všechny
+    další kontroly přeskočíme. To si můžeme dovolit protože i když se
+    čísla inode recyklují, pravděpodobnost, že to samé číslo bude zrecyklováno
+    pro stejně pojmenovaný soubor ve stejném adresáři je pro všechny praktické
+    účely zanedbatelně malá. Zvlášť pokud jediným rizikem je např. mírně
+    neaktuální index.
+
+    Po takovéto úpravě provedeme jen readdir a O(1) syscallů na každou
+    *změněnou* adresářovou položku.
+
+# Hooky v kernelu
+
+Protože fanotify potřebuje `struct path` a funkce typu `vfs_rename` a spol.
+dostanou jen inode, nemůžeme fanotify události dělat uvnitř nich, musíme
+to dělat už u jejich volajících. Můžeme se ale vůbec spolehnout na to, že
+tito volající budou mít `struct path` k dispozici. Myslím, že ano, a to ze
+dvou důvodů: (1) používá se pro volání security modulů (funkce
+security_path_rename a podobné), (2) používá se k ošetření readonly bind
+mountů (je třeba vědět, skrz který vfsmount k inodu přistupujeme).
+
+Identifikoval jsem v zásadě jen tři druhy volajících funkcí vfs_rename a spol.:
+
+  * Syscally
+  * NFS server
+  * Stackable filesystémy - aktuálně overlayfs, ecryptfs a cachefiles
+
+První dvě místa řeší přiložené patche. Třetí myslím, že půjde vyřešit, ale
+zatím na to nebyl čas.
+
+## Alternativy
+
+Alternativou je samozřejmě explicitně hlásit konkrétní události (FAN_RENAME,
+FAN_UNLINK, etc.). Na to by se daly použít hooky v úplně stejných místech VFS
+jako ty stávající. Jediným problémem je, že to vyžaduje zásadnější změnu
+fanotify userspace API, abychom mohli předat všechny potřebné informace.
+
+Pokud bychom chtěli dosáhnout stejné míry robustnosti vůči race conditionům
+jako u FAN_MODIFY_DIR a IID magie, museli bychom si například při hlášení
+renamu předat nějaký jednoznačný identifikátor hned tří objektů: zdrojového
+adresáře, přejmenovávaného objektu a cílového adresáře. Pro tyto účely mohou
+být identifikátory například O_PATH file deskriptory, což by bylo celkem
+konzistentní s aktuální podobou fanotify API. Ale to je možná ta jednodušší
+část. Pak by bylo třeba předat ještě staré a nové basename, a to znamená řešit
+ukládání dynamicky velkých stringů do `struct fanotify_event_metadata`, což
+není nic jednoduchého a asi by bylo na delší diskuze.
+
+Řešení s FAN_MODIFY_DIR je o trochu méně efektivní, ale to za cenu jednoduchosti.
+A řeší aktuální nejpalčivější problémy s inotify a fanotify. Podrobnější
+události je navíc možné kdykoli dodělat a mohou s FAN_MODIFY_DIR pokojně
+koexistovat. Dokážu si představit, že i když budou existovat, pro některé
+aplikace bude jednodušší prostě poslouchat FAN_MODIFY_DIR.
+
+Toť vše, děkuji za jakékoli názory.
+
+S pozdravem
+Filip Štědronský
+
+

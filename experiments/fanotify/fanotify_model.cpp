@@ -17,9 +17,6 @@
 #include <list>
 using namespace std;
 
-// Maximum number of hardinks to a single inode (discounting '.' and '..' entries)
-#define MAX_LINKS 16
-
 #ifndef FAN_MODIFY_DIR
 #define FAN_MODIFY_DIR 0x00040000
 #endif
@@ -133,7 +130,7 @@ void delete_inode(struct inode_info *inode) {
 struct inode_info *find_inode(int fd) {
     struct stat st;
     CHK(fstat(fd, &st));
-    char handle[MAX_HANDLE_SZ];
+    char handle[sizeof(struct file_handle) + MAX_HANDLE_SZ];
     struct file_handle *fh = (struct file_handle*)handle;
     fh->handle_bytes = sizeof(handle);
     int mntid;

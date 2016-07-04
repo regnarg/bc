@@ -11,6 +11,7 @@
         notifikace.
       - Výsledný patch je velmi jednoduchý.
       - Nakonec Medvěd uznal, že je to celkem pěkné.
+
   * Možná se zeptat Honzy Káry
 
 ## Vnitřní struktura, ukládání
