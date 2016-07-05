@@ -1,5 +1,14 @@
 import sys, os, time
+import uuid
+import binascii
+from functools import *
+from collections import *
+from itertools import *
+from contextlib import *
+
 from butter.fhandle import *
+
+def gen_uuid(): return str(uuid.uuid4()).replace('-','')
 
 class AttrDict(dict):
     """A dictionary that allows access to items using the attribute syntax."""
@@ -67,8 +76,10 @@ class SqliteWrapper(object):
         self.connection.setbusytimeout(int(timeout*1000))
 
     def _iter(self, cur):
-        col_names = [ desc[0] for desc in cur.getdescription() ]
+        col_names = None
         for row in cur:
+            # Hack: getdescription doesn't work when the result is empty.
+            if col_names is None: col_names = [ desc[0] for desc in cur.getdescription() ]
             yield AttrDict(zip(col_names, row))
         cur.close()
 
@@ -96,7 +107,7 @@ class SqliteWrapper(object):
         # utilise prepared query caching
         items = sorted(row.items())
         names = ','.join(sorted( x[0] for x in items ))
-        placeholders = '?' + ',?'*(len(names) - 1)
+        placeholders = '?' + ',?'*(len(items) - 1)
         opts = ''
         if _on_conflict: opts += ' or %s'%_on_conflict
         query = "insert%s into %s (%s) values (%s)" % (opts, table, names, placeholders)
@@ -173,13 +184,13 @@ def is_mountpoint(path):
 
 def handle_to_str(fh):
     """Return a string representation of a file handle."""
-    return "%d:%s" % (fh.type, base64.b64encode(fh.handle).decode().replace('\n', ''))
+    return "%d:%s" % (fh.type, binascii.hexlify(fh.handle).decode())
 def str_to_handle(s):
     """Convert a string representation to a butter-compatible FileHandle object."""
     try:
         tp, data = s.split(':', 1)
         tp = int(tp)
-        data = base64.b64decode(data, 'base64')
+        data = binascii.unhexlify(data)
     except ValueError:
         raise ValueError("invalid handle: '%s'" % s)
     return FileHandle(tp, data)
@@ -205,3 +216,53 @@ def spurt(path, content, *, dir_fd=None):
     with openat(path+'.tmp', 'w', dir_fd=dir_fd) as file: file.write(content)
     os.rename(path+'.tmp', path, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
 
+
+### DEBUG UTILS ###
+
+@contextmanager
+def stdio_to_tty():
+    # Must do low-level redirection because redirecting using `sys.stdout = open(...)`
+    # breaks readline (arrow keys stop working and the like). Dunno why.
+    import os
+    sys.stdout.flush()
+    sys.stderr.flush()
+    orig = os.dup(0), os.dup(1), os.dup(2)
+    try:
+        inp = os.open('/dev/tty', os.O_RDONLY)
+        out = os.open('/dev/tty', os.O_WRONLY)
+        os.dup2(inp, 0)
+        os.dup2(out, 1)
+        os.dup2(out, 2)
+        os.close(inp)
+        os.close(out)
+        yield
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        for i in range(3):
+            os.dup2(orig[i], i)
+            os.close(orig[i])
+
+def ipy():
+    """Run the IPython console in the context of the current frame.
+
+    Useful for ad-hoc debugging."""
+    from IPython.terminal.embed import InteractiveShellEmbed
+    from IPython import embed
+    frame = sys._getframe(1)
+    with stdio_to_tty():
+        shell = InteractiveShellEmbed.instance()
+        shell(local_ns=frame.f_locals, global_ns=frame.f_globals)
+
+try:
+    # Live debugging on exception using IPython/ipdb
+    from IPython.core import ultratb
+    def excepthook(t,v,tb):
+        # Do not catch KeyboardInterrupt and the like
+        if not issubclass(t, Exception): return sys.__excepthook__(t,v,tb)
+        # stdio may be redirected in some workers, we want ipython to access the tty
+        with stdio_to_tty():
+            ultratb.FormattedTB(mode='Verbose', color_scheme='Linux', call_pdb=1)(t,v,tb)
+    sys.excepthook = excepthook
+except ImportError:
+    pass

@@ -11,3 +11,11 @@
 #### Enter Filehandles
 
 ## Online Change Detection
+
+### `inotify`
+
+### `fanotify`
+
+### The `FAN_MODIFY_DIR` Kernel Patch
+
+### Other Methods

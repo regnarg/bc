@@ -50,9 +50,9 @@ class Store:
             self.root_path = frealpath(self.root_fd)
         else:
             self.root_path = os.path.realpath(root)
-            self.root_fd = os.open(self.root_path, os.O_PATH|os.O_DIRECTORY)
+            self.root_fd = os.open(self.root_path, os.O_DIRECTORY)
         self.meta_path = os.path.join(self.root_path, META_DIR)
-        self.meta_fd = os.open(META_DIR, os.O_PATH|os.O_DIRECTORY, dir_fd=self.root_fd)
+        self.meta_fd = os.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
 
     @classmethod
     def find(cls, dir='.'):
