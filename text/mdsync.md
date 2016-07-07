@@ -1,7 +1,9 @@
 # Metadata Synchronization
 
-## Reconciliation Trees
+## The Set Reconciliation Problem
 
-## Invertible Bloom Filters
+### Reconciliation Trees
 
-## A Hybrid Solution
+### Invertible Bloom Filters
+
+### A Hybrid Solution

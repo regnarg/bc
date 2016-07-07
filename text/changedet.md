@@ -59,9 +59,18 @@ obvious disadvantages are that most filesystems do not support such operations
 and the need for a solution specifically tailored to each filesystem that does
 support change detection (there is no generic API, at least on Linux).
 
+The next sections will survey various way of doing each kind of change detection
+on Linux.
+
 ## Offline Change Detection
 
 ### A Linux VFS Primer
+
+Before diving into change detection, we have to understand a bit about the structure
+of Linux filesystems and filesystem APIs. If terms like *inode*, *hardlink*,
+or *file descriptor* are familiar to you, you can safely skip this section.
+
+### 
 
 ### Identifying Inodes
 
@@ -76,3 +85,5 @@ support change detection (there is no generic API, at least on Linux).
 ### The `FAN_MODIFY_DIR` Kernel Patch
 
 ### Other Methods
+
+## Filesystem-Based Change Detection

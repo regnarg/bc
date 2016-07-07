@@ -23,11 +23,11 @@ logging.basicConfig(level=logging.DEBUG)
 class CrossMount(Exception): pass
 
 class FanotifyWatcher:
-    MASK = FAN_OPEN | FAN_CLOSE_WRITE | FAN_MODIFY_DIR | FAN_ONDIR
+    MASK = FAN_CLOSE_WRITE | FAN_MODIFY_DIR | FAN_ONDIR # FAN_OPEN
     def __init__(self, dir):
-        if not is_mountpoint(dir):
-            err("Watched directory '%s' must be a mountpoint."
-                    " The -m option might help with that." % args.dir)
+        #if not is_mountpoint(dir):
+        #    err("Watched directory '%s' must be a mountpoint."
+        #            " The -m option might help with that." % args.dir)
         self.store = Store.find(dir or '.')
         self.db = self.store.open_db()
         self.root_fd = self.store.root_fd
@@ -46,6 +46,7 @@ class FanotifyWatcher:
 
 
     def on_fanotify_event(self, event):
+        close = True
         log.debug("Got fanotify event: %r", event)
         try:
             if issubpath(event.filename, self.store.meta_path):
@@ -60,9 +61,10 @@ class FanotifyWatcher:
                 # tree. This is inefficient but the best we can do.
                 return
             if event.mask & FAN_MODIFY_DIR:
-                self.scan(event.fd)
+                self.scan(event.fd) # scan closes fd
+                close = False
         finally:
-            os.close(event.fd)
+            if close: os.close(event.fd)
 
     def on_fanotify_readable(self):
         for event in self.fan.read_events():
@@ -111,40 +113,48 @@ class FanotifyWatcher:
             return self.db.query_first('select * from inodes where ino=?', st.st_ino)
 
 
-    def scan(self, dirfd):
+    def scan(self, dirfd, *, close=True):
         log.debug("Scanning %d (%s)", dirfd, frealpath(dirfd))
-        try: dirobj = self.find_inode(dirfd)
-        except CrossMount: return
-        with self.db:
-            for entry in fdscandir(dirfd):
-                # Grab an O_PATH file descriptor to guarantee that all the subsequent
-                # operations (fstat, name_to_handle_at, ...) refer to the same inode,
-                # even if the name is replaced.
-                fd = os.open(entry.name, os.O_PATH, dir_fd=dirfd)
-                obj = self.find_inode(fd)
+        try:
+            try: dirobj = self.find_inode(dirfd)
+            except CrossMount: return
+            with self.db:
+                for entry in fdscandir(dirfd):
+                    try:
+                        entry.name.encode('utf-8')
+                    except UnicodeEncodeError:
+                        log.warning('Invalid UTF-8 name: %s/%s. Skipping.', ascii(frealpath(dirfd)), ascii(entry.name))
+                        continue
+                    # Grab an O_PATH file descriptor to guarantee that all the subsequent
+                    # operations (fstat, name_to_handle_at, ...) refer to the same inode,
+                    # even if the name is replaced.
+                    fd = os.open(entry.name, os.O_PATH | os.O_NOFOLLOW, dir_fd=dirfd)
 
-                # self.db.update('inodes', 'parent=? and name=? and ino!=?',
-                #         dirobj.ino, entry.name, obj.ino, name=None, parent=None,
-                #         updated=1)
-                # if self.db.changes(): # A replacement took place
-                #     pass
 
-                try:
-                    with self.db:
-                        old_obj = self.db.query_first('select * from links join inodes '
-                                    ' using (ino) where parent = ? and name = ?',
-                                    dirobj.ino, entry.name)
-                        if old_obj is None or obj.ino != old_obj.ino:
-                            if old_obj is not None:
-                                self.db.update('links', 'parent=? and name=?',
-                                        dirobj.ino, entry.name, ino=obj.ino)
-                            else:
-                                log.debug("Linking %s into %s", frealpath(fd),
-                                        frealpath(dirfd))
-                                self.db.insert('links', ino=obj.ino, parent=dirobj.ino,
-                                            name=entry.name)
-                finally:
-                    if fd is not None: os.close(fd)
+                    try:
+                        obj = self.find_inode(fd)
+                        # self.db.update('inodes', 'parent=? and name=? and ino!=?',
+                        #         dirobj.ino, entry.name, obj.ino, name=None, parent=None,
+                        #         updated=1)
+                        # if self.db.changes(): # A replacement took place
+                        #     pass
+                        with self.db:
+                            old_obj = self.db.query_first('select * from links join inodes '
+                                        ' using (ino) where parent = ? and name = ?',
+                                        dirobj.ino, entry.name)
+                            if old_obj is None or obj.ino != old_obj.ino:
+                                if old_obj is not None:
+                                    self.db.update('links', 'parent=? and name=?',
+                                            dirobj.ino, entry.name, ino=obj.ino)
+                                else:
+                                    log.debug("Linking %s into %s", frealpath(fd),
+                                            frealpath(dirfd))
+                                    self.db.insert('links', ino=obj.ino, parent=dirobj.ino,
+                                                name=entry.name)
+                    finally:
+                        if fd is not None: os.close(fd)
+        finally:
+            if close: os.close(dirfd)
 
 
     def check_root(self):
