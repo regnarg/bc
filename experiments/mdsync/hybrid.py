@@ -1,0 +1,177 @@
+#!/usr/bin/python3
+
+from random import randrange, seed
+from copy import copy
+import asyncio
+
+import hashlib
+
+seed(42)
+
+def md4(x): return int(hashlib.new('md4', x.encode('ascii')).hexdigest(), 16)
+
+KEY_BITS = 128
+VAL_BITS = 128
+MAX_KEY = 2**KEY_BITS
+MAX_VAL = 2**VAL_BITS
+ISLEAF = 1 << KEY_BITS
+BITS_PER_LEVEL = 4
+ARITY = 1 << BITS_PER_LEVEL
+assert KEY_BITS % BITS_PER_LEVEL == 0
+LEVELS = KEY_BITS // BITS_PER_LEVEL
+SALT1 = 'a'
+SALT2 = 'b'
+
+def h1(x): return md4(SALT1 + hex(x))
+def h2(x): return md4(SALT2 + hex(x))
+
+class SparseDict(dict):
+    def __setitem__(self, key, val):
+        if val == 0:
+            try: del self[key]
+            except KeyError: pass
+        else:
+            super().__setitem__(key, val)
+    def __getitem__(self, key):
+        try: return super().__getitem__(key)
+        except KeyError: return 0
+
+class XorTree:
+    def __init__(self):
+        self.data = SparseDict()
+        self.cnts = SparseDict()
+        self.count = 0
+    def __getitem__(self, key):
+        return self.data[key | ISLEAF]
+    def __setitem__(self, key, val):
+        assert 0 <= key <= MAX_KEY
+        assert 0 <= val <= MAX_VAL
+        idx = key | ISLEAF
+        oldval = self.data[idx]
+        change = val ^ oldval
+        cntdiff = (val != 0) - (oldval != 0)
+        while idx > 0:
+            self.data[idx] ^= change
+            self.cnts[idx] += cntdiff
+            assert (self.data[idx] == 0) == (self.cnts[idx] == 0)
+            idx >>= BITS_PER_LEVEL
+        self.count += cntdiff
+    def __delitem__(self, key):
+        self[key] = 0
+    def __copy__(self):
+        r = XorTree()
+        r.data = SparseDict(self.data)
+        r.cnts = SparseDict(self.cnts)
+        r.count = self.count
+        return r
+    def __contains__(self, key):
+        return key|ISLEAF in self.data
+    def __len__(self):
+        return self.count
+
+class HybridTree:
+    def __init__(self):
+        self.T1 = XorTree()
+        self.T2 = XorTree()
+        
+    def add(self, key):
+        sortkey = h1(key)
+        self.T1[sortkey] = key
+        self.T2[sortkey] = h2(key)
+
+    def remove(self, key):
+        self.T1[key] = 0
+        self.T2[key] = 0
+
+    def __copy__(self):
+        r = HybridTree()
+        r.T1 = copy(self.T1)
+        r.T2 = copy(self.T2)
+        return r
+
+SIZE = 10**3
+CHANGES = 10
+
+async def endpoint(H, rx, tx, archive):
+    lvl_alive = [1]
+    level = 0
+    to_send = []
+    send_subtree = []
+    while lvl_alive:
+        print("Level %d, alive %r" % (level, lvl_alive))
+        sent = { idx: (H.T1.data[idx], H.T2.data[idx], H.T1.cnts[idx]) for idx in lvl_alive }
+        archive.append(sent)
+        await tx.put(sent)
+        recv = await rx.get()
+        next_lvl = []
+        for vert in set(sent.keys()) | set(recv.keys()):
+            my_val, my_chk, my_cnt = sent.get(vert, (0,0,0))
+            their_val, their_chk, their_cnt = recv.get(vert, (0,0,0))
+            print("Vert %d: my %x/%x/%d, their %x/%x/%d" % (vert, my_val, my_chk, my_cnt, their_val, their_chk, their_cnt))
+            if my_cnt == 0: continue # subtree empty, nothing to send
+            if their_cnt == 0: # they have nothing, send whole subtree, no need to recurse
+                send_subtree.append(vert)
+                continue
+
+            if my_val == their_val and my_chk == their_chk and my_cnt == their_cnt:
+                continue # no changes
+
+            if abs(my_cnt - their_cnt) == 1 and h2(my_val ^ their_val) == my_chk ^ their_chk: # only single chnage in subtree
+                if my_cnt > their_cnt: # if we have the extra object, send it
+                    to_send.append(my_val ^ their_val)
+                continue
+
+            # all other cases: we have two different non-trivial subtrees, recurse on both ends
+            assert level < LEVELS -1
+            print("...recursing")
+            child_base = vert << BITS_PER_LEVEL
+            next_lvl += [ idx for idx in range(child_base, child_base + ARITY) if idx in H.T1.data ]
+        lvl_alive = next_lvl
+        level += 1
+                
+        
+def xfer_stat(archive):
+    # Each vertex containss 2 128b numbers and one 32b count
+    return (16*2 + 4) * sum( [ len(msg) for msg in archive ] )
+
+def reconcile(A, B):
+    ab_archive = []
+    ba_archive = []
+    ab = asyncio.Queue()
+    ba = asyncio.Queue()
+    endp_a = endpoint(A, ba, ab, ab_archive)
+    endp_b = endpoint(B, ab, ba, ba_archive)
+    fut = asyncio.gather(endp_a, endp_b)
+    asyncio.get_event_loop().run_until_complete(fut)
+    assert len(ab_archive) == len(ba_archive)
+    ab_xfer = xfer_stat(ab_archive) / 1024.
+    ba_xfer = xfer_stat(ba_archive) / 1024.
+    print("Roundtrips:", len(ab_archive))
+    print("Total xfer: %.1f kB" % (ab_xfer+ba_xfer))
+    print("AB xfer: %.1f kB" % ab_xfer)
+    print("BA xfer: %.1f kB" % ba_xfer)
+    
+
+def test():
+    orig = HybridTree()
+    print("Generating base tree")
+    for i in range(SIZE):
+        key = randrange(MAX_KEY)
+        orig.add(key)
+
+    new = copy(orig)
+
+    print("Generating changes")
+    for i in range(CHANGES):
+        new.add(randrange(MAX_KEY))
+        orig.add(randrange(MAX_KEY))
+
+    print(orig.T1.data[1], new.T1.data[1])
+
+    print("Reconciling")
+    reconcile(orig, new)
+
+
+
+if __name__ == '__main__':
+    test()
