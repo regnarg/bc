@@ -6,7 +6,7 @@ import asyncio
 
 import hashlib
 
-seed(42)
+##seed(42)
 
 def md4(x): return int(hashlib.new('md4', x.encode('ascii')).hexdigest(), 16)
 
@@ -89,8 +89,11 @@ class HybridTree:
         r.T2 = copy(self.T2)
         return r
 
-SIZE = 10**3
-CHANGES = 10
+    def __contains__(self, key):
+        return h1(key) in self.T1
+
+SIZE = 10**5
+CHANGES = 500
 
 async def endpoint(H, rx, tx, archive):
     lvl_alive = [1]
@@ -128,6 +131,19 @@ async def endpoint(H, rx, tx, archive):
             next_lvl += [ idx for idx in range(child_base, child_base + ARITY) if idx in H.T1.data ]
         lvl_alive = next_lvl
         level += 1
+    for vert in send_subtree:
+        print("send_subtree", vert)
+        # BFS of the subtree
+        from collections import deque
+        q = deque([vert])
+        while q:
+            itm = q.popleft()
+            if itm & ISLEAF:
+                to_send.append(H.T1.data[itm])
+            else:
+                child_base = itm << BITS_PER_LEVEL
+                q += [ idx for idx in range(child_base, child_base + ARITY) if idx in H.T1.data ]
+    return to_send
                 
         
 def xfer_stat(archive):
@@ -142,14 +158,19 @@ def reconcile(A, B):
     endp_a = endpoint(A, ba, ab, ab_archive)
     endp_b = endpoint(B, ab, ba, ba_archive)
     fut = asyncio.gather(endp_a, endp_b)
-    asyncio.get_event_loop().run_until_complete(fut)
+    ret_a, ret_b = asyncio.get_event_loop().run_until_complete(fut)
     assert len(ab_archive) == len(ba_archive)
-    ab_xfer = xfer_stat(ab_archive) / 1024.
-    ba_xfer = xfer_stat(ba_archive) / 1024.
+    xfer = xfer_stat(ab_archive) + xfer_stat(ba_archive)
     print("Roundtrips:", len(ab_archive))
-    print("Total xfer: %.1f kB" % (ab_xfer+ba_xfer))
-    print("AB xfer: %.1f kB" % ab_xfer)
-    print("BA xfer: %.1f kB" % ba_xfer)
+    print("Total xfer: %.1f kB" % (xfer/1024))
+    print("Per change: %.1f B" % (xfer / (2*CHANGES))) # 2x because CHANGES is per direction
+    #print(len(ret_a), ret_a)
+    #print(len(ret_b), ret_b)d
+    #CHECK CORRECTNESS
+    for itm in ret_a: B.add(itm)
+    for itm in ret_b: A.add(itm)
+    assert set(A.T1.data.values()) == set(B.T1.data.values())
+
     
 
 def test():
