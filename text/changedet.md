@@ -61,21 +61,61 @@ support change detection (there is no generic API, at least on Linux).
 The next sections will survey various ways of doing each kind of change detection
 on Linux.
 
-## Offline Change Detection
+Offline Change Detection
+------------------------
 
 ### The Anatomy of Linux Filesystems
 
 Before diving into change detection, we have to understand a bit about the structure
 of Linux filesystems and filesystem APIs. If terms like *inode*, *hardlink*,
 and *file descriptor* are familiar to you, you can safely skip this section.
+Most of what is being said here applies to all Unix-based operating systems,
+however, some details might be specific to Linux.
+
+
+<!-- Describe VFS and mounts first? -->
+#### Inodes and Links
 
 The basic unit of a Linux filesystem is an **inode**. An inode is an in-kernel structure
 representing one filesystem object. There are many types of inodes: files, directories,
 symbolic links, and a few more esoteric types, which we shall mostly ignore (so-called
 *special files*: sockets, named pipes and device nodes).
 
-The inode serves as a logical identifier for the given filesystem object. It holds
-most of its metadata: size, permissions, last modification time. It also 
+The inode serves as a logical identifier for the given filesystem object. It also holds
+most of its metadata: size, permissions, last modification time. However, **an inode does
+not store its own name.**
+
+The names are instead stored in the parent directory inode. The content of
+a directory inode can be tought of as a mapping from names to inodes of its direct
+children. The elements of this mapping are called *directory entries*.
+
+This implies that an inode can have multiple names if multiple directory entries
+reference the same inode. These names are usually called *hardlinks* or simply
+*links* to the given inode.
+
+However, for practical reasons, multiple hardlinks
+to a directory are not allowed. Thus while the filesystem structure is a DAG rather
+than a tree, directories form a proper tree. Also, unlike all other kinds of inodes,
+directories store a reference to their parent (as a special directory entry called
+"`..`").
+
+This explains many otherwise perplexing (especially for newcomers to the Unix world)
+facts:
+
+  * The syscall to delete a file is called `unlink`. It does not in fact delete
+    a file (inode), but merely removes one link to it. Only when all links to
+    an inode are removed, it is deleted.
+  * It is possible to delete a file that is opened by a process. That process
+    can happily continue using the file. This is because and opened file also
+    counts as a "reference" to the inode. Only when all references to the inode
+    (both links and open files) are gone, the inode is physically deleted and
+    its space freed.
+  * To rename or delete a file, you do not need write permissions to that file, only
+    to the parent directory. These operations do not touch the file inode
+    at all, they change only the parent directory inode (by adding/removing directory
+    entries).
+  * Renaming a file updates the last modification time of the parent directory, not
+    the file, for the same reason.
 
 ### 
 
