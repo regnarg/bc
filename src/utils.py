@@ -8,7 +8,9 @@ from contextlib import *
 
 from butter.fhandle import *
 
-def gen_uuid(): return str(uuid.uuid4()).replace('-','')
+def gen_uuid():
+    """Generate a random 128-bit ID and return it as a hexadecimal string."""
+    return str(uuid.uuid4()).replace('-','')
 
 class AttrDict(dict):
     """A dictionary that allows access to items using the attribute syntax."""
@@ -97,6 +99,11 @@ class SqliteWrapper(object):
     def execute(self, query, *args, **kw):
         cur = self.connection.cursor()
         cur.execute(query, kw or args)
+        cur.close()
+
+    def executemany(self, query, data):
+        cur = self.connection.cursor()
+        cur.executemany(query, data)
         cur.close()
 
     def insert(self, table, *args, _on_conflict=None, **kw):

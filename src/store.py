@@ -9,6 +9,7 @@ SQLite database.
 import sys, os
 import apsw # an alternative sqlite wrapper
 from utils import *
+from butter.fhandle import *
 
 ## class PerPartesTransactionManager:
 ##     """A class that splits a long-running transaction into several smaller ones.
@@ -89,3 +90,15 @@ class Store:
     def __del__(self):
         if self.meta_fd: os.close(self.meta_fd)
         if self.root_fd: os.close(self.root_fd)
+
+    def open_handle(self, handle, flags):
+        return open_by_handle_at(self.root_fd, str_to_handle(handle), flags)
+
+    def handle_exists(self, handle):
+        try:
+            fd = self.open_handle(handle, os.O_PATH)
+        except StaleHandle:
+            return False
+        else:
+            os.close(fd)
+            return True
