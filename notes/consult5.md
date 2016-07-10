@@ -5,9 +5,23 @@ Prepared
   * Jack's reply
       - event merging
       - deliberate sleeping to facilitate merging and reduce context-switches
-  * Request advice about citing and links
   * Finalized Kočkopes reconciliation
       - use hashes as keys instead of original IDs
       - use XOR of values and a different hash instead of a Merkle tree
         (same as IBF does)
+
+Ask
+===
+
+# Style / Form
+
+  * Citing and links
+      - The syntactic (or nonsyntactic) role of citations in sentence structure.
+        Square-brackets vs. what the template does.
+  * Saner page numbering that corresponds to PDF pages: is it allowable?
+  * Usage of \noindent. E.g. in "the term inode is overloaded..." Is that correct?
+    Essentially everywhere when not preceded by another paragraph?
+  * ext2/3/4?
+  * filesystem X file system
+  * filesystem X filesystem type
 

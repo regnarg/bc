@@ -76,10 +76,10 @@ however, some details might be specific to Linux.
 <!-- Describe VFS and mounts first? -->
 #### Inodes and Links
 
-The basic unit of a Linux filesystem is an **inode**. An inode is an in-kernel structure
-representing one filesystem object. There are many types of inodes: files, directories,
-symbolic links, and a few more esoteric types, which we shall mostly ignore (so-called
-*special files*: sockets, named pipes and device nodes).
+The basic unit of a Linux filesystem is an **inode**. An inode represents one filesystem
+object: e.g. a file, a directory, or a symbolic link. There are a few more esoteric inode
+types, which we shall mostly ignore (so-called *special files*: sockets, named pipes and
+device nodes).
 
 The inode serves as a logical identifier for the given filesystem object. It also holds
 most of its metadata: size, permissions, last modification time. However, **an inode does
@@ -116,6 +116,43 @@ facts:
     entries).
   * Renaming a file updates the last modification time of the parent directory, not
     the file, for the same reason.
+
+\noindent
+The term *inode* is actually a little overloaded. It can mean at least three related
+but distinct things:
+
+  * A purely logical conept that helps us to talk about filesystem structure and behaviour.
+  * A kernel in-memory structure (`struct inode`) that identifies a file object and
+    holds its metadata. These structures are kept in memory as a part of the *inode cache*
+    to speed up file access.
+  * An filesystem-specific on-disk structure used to hold file object metadata and usually
+    also information about the location of the file's data blocks on the disk. However,
+    some filesystems do not internally have any concept of inodes, especially non-Unix
+    filesystem like FAT.
+
+Each inode (in all the three senses) has a unique identifier called the **inode number**
+(*ino* for short). In traditional Linux filesystems like `ext2`, the inode number directly
+corresponds to the physical location of the inode structure (in the third sense) on disk. Thus
+when an inode is deleted, its number may be later reused when another inode occupies the
+same space. That this happens quite commonly can be shown by this simple experiment on an
+ext2/3/4 filesystem:
+
+    $ echo "first file" >first
+    $ ls -i
+    12 first
+    $ rm first
+    $ echo "second file" >second
+    $ ls -i
+    12 second
+
+Both files got inode number 12 despite being completely unrelated.
+In other filesystems (e.g. `btrfs`), the inode number is simply a sequentially
+assigned identifier and numbers are not reused until necessary (usually never, because
+inode numbers can be 64-bit so overflow is unlikely).
+
+#### Filesystem Access Syscalls
+
+#### Idioms
 
 ### 
 
