@@ -102,24 +102,31 @@ directories store a reference to their parent (as a special directory entry call
 This explains many otherwise perplexing (especially for newcomers to the Unix world)
 facts:
 
-  * The syscall to delete a file is called `unlink`. It does not in fact delete
+  * \noindent{}**Perplexing fact:** The syscall used to delete a file is called `unlink`.\
+    **Explanation:** It does not in fact delete
     a file (inode), but merely removes one link to it. Only when all links to
     an inode are removed, it is deleted.
-  * It is possible to delete a file that is opened by a process. That process
-    can happily continue using the file. This is because and opened file also
-    counts as a "reference" to the inode. Only when all references to the inode
-    (both links and open files) are gone, the inode is physically deleted and
-    its space freed.
-  * To rename or delete a file, you do not need write permissions to that file, only
-    to the parent directory. These operations do not touch the file inode
+
+  * \noindent{}**Perplexing fact:** It is possible to delete a file that is opened by
+    a process. That process can happily continue using the file.\
+    **Explanation:** Inodes in kernel are reference counted. Only when all in-kernel
+    references to the inode are gone *and* the inode has no links, it is physically
+    deleted.
+
+  * \noindent{}**Perplexing fact:** To rename or delete a file, you do not need write
+    permissions (or in fact, any permissions) to that file, only to the parent directory.\
+    **Explanation:** These operations do not touch the file inode
     at all, they change only the parent directory inode (by adding/removing directory
     entries).
-  * Renaming a file updates the last modification time of the parent directory, not
-    the file, for the same reason.
+
+  * \noindent{}**Perplexing fact:** Renaming a file updates the last modification time
+    of the parent directory, not the file.\
+    **Explanation:** Same as above.
+
 
 \noindent
-The term *inode* is actually a little overloaded. It can mean at least three related
-but distinct things:
+We should also clarify that the term *inode* is actually a little overloaded. It can mean
+at least three related but distinct things:
 
   * A purely logical conept that helps us to talk about filesystem structure and behaviour.
   * A kernel in-memory structure (`struct inode`) that identifies a file object and
@@ -129,6 +136,14 @@ but distinct things:
     also information about the location of the file's data blocks on the disk. However,
     some filesystems do not internally have any concept of inodes, especially non-Unix
     filesystem like FAT.
+
+#### Filesystem Access Syscalls
+
+#### Idioms
+
+### 
+
+### Identifying Inodes
 
 Each inode (in all the three senses) has a unique identifier called the **inode number**
 (*ino* for short). In traditional Linux filesystems like `ext2`, the inode number directly
@@ -149,14 +164,6 @@ Both files got inode number 12 despite being completely unrelated.
 In other filesystems (e.g. `btrfs`), the inode number is simply a sequentially
 assigned identifier and numbers are not reused until necessary (usually never, because
 inode numbers can be 64-bit so overflow is unlikely).
-
-#### Filesystem Access Syscalls
-
-#### Idioms
-
-### 
-
-### Identifying Inodes
 
 #### Enter Filehandles
 

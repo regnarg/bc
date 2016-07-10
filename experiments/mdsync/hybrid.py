@@ -93,7 +93,7 @@ class HybridTree:
     def __contains__(self, key):
         return h1(key) in self.T1
 
-SIZE = 50000
+SIZE = 10**3
 CHANGES = 5000
 
 async def endpoint(H, rx, tx, archive):

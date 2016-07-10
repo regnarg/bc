@@ -18,6 +18,11 @@ Ask
   * Citing and links
       - The syntactic (or nonsyntactic) role of citations in sentence structure.
         Square-brackets vs. what the template does.
+      - Citation as a confirmation for a statement (like square brackets on wikipedia)
+        X "go see this!"
+      - Linking to places in  the kernel source?
+      - Linking to software homepages?
+      - Linking to manual pages?
   * Saner page numbering that corresponds to PDF pages: is it allowable?
   * Usage of \noindent. E.g. in "the term inode is overloaded..." Is that correct?
     Essentially everywhere when not preceded by another paragraph?
