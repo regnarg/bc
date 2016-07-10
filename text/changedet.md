@@ -23,10 +23,9 @@ to an increase in change detection latency.
 operating system features that allow applications to be notified of filesystem
 changes immediately as they happen. Instead of polling, the application
 just passively waits for change notifications. However, the notification systems
-often have many limitations, issues and idiosyncrasies that will be discussed
-in the subsequent sections. For example they fail to report some kinds of
-operations (e.g. renames) or operations done in specific ways (e.g. writes
-to a memory-mapped file).
+often have many limitations, issues and idiosyncrasies. For example they fail
+to report some kinds of operations (e.g. renames) or operations done in specific
+ways (e.g. writes to a file via a memory mapping).
 
 Even with a perfect notification system, we face a serious issue. The
 application monitoring the notifications must be running at all times.
@@ -59,16 +58,24 @@ obvious disadvantages are that most filesystems do not support such operations
 and the need for a solution specifically tailored to each filesystem that does
 support change detection (there is no generic API, at least on Linux).
 
-The next sections will survey various way of doing each kind of change detection
+The next sections will survey various ways of doing each kind of change detection
 on Linux.
 
 ## Offline Change Detection
 
-### A Linux VFS Primer
+### The Anatomy of Linux Filesystems
 
 Before diving into change detection, we have to understand a bit about the structure
 of Linux filesystems and filesystem APIs. If terms like *inode*, *hardlink*,
-or *file descriptor* are familiar to you, you can safely skip this section.
+and *file descriptor* are familiar to you, you can safely skip this section.
+
+The basic unit of a Linux filesystem is an **inode**. An inode is an in-kernel structure
+representing one filesystem object. There are many types of inodes: files, directories,
+symbolic links, and a few more esoteric types, which we shall mostly ignore (so-called
+*special files*: sockets, named pipes and device nodes).
+
+The inode serves as a logical identifier for the given filesystem object. It holds
+most of its metadata: size, permissions, last modification time. It also 
 
 ### 
 
