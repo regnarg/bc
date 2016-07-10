@@ -5,6 +5,7 @@ from copy import copy
 import asyncio
 
 import hashlib
+from math import *
 
 ##seed(42)
 
@@ -92,8 +93,8 @@ class HybridTree:
     def __contains__(self, key):
         return h1(key) in self.T1
 
-SIZE = 10**5
-CHANGES = 500
+SIZE = 50000
+CHANGES = 5000
 
 async def endpoint(H, rx, tx, archive):
     lvl_alive = [1]
@@ -102,26 +103,27 @@ async def endpoint(H, rx, tx, archive):
     send_subtree = []
     while lvl_alive:
         print("Level %d, alive %r" % (level, lvl_alive))
-        sent = { idx: (H.T1.data[idx], H.T2.data[idx], H.T1.cnts[idx]) for idx in lvl_alive }
+        sent = { idx: (H.T1.data[idx], H.T2.data[idx]) for idx in lvl_alive }
         archive.append(sent)
         await tx.put(sent)
         recv = await rx.get()
         next_lvl = []
         for vert in set(sent.keys()) | set(recv.keys()):
-            my_val, my_chk, my_cnt = sent.get(vert, (0,0,0))
-            their_val, their_chk, their_cnt = recv.get(vert, (0,0,0))
-            print("Vert %d: my %x/%x/%d, their %x/%x/%d" % (vert, my_val, my_chk, my_cnt, their_val, their_chk, their_cnt))
-            if my_cnt == 0: continue # subtree empty, nothing to send
-            if their_cnt == 0: # they have nothing, send whole subtree, no need to recurse
+            my_val, my_chk = sent.get(vert, (0,0))
+            their_val, their_chk = recv.get(vert, (0,0))
+            print("Vert %d: my %x/%x, their %x/%x" % (vert, my_val, my_chk, their_val, their_chk))
+            if my_val == 0 and my_chk == 0: continue # subtree empty, nothing to send
+            if their_val == 0 and their_chk == 0: # they have nothing, send whole subtree, no need to recurse
                 send_subtree.append(vert)
                 continue
 
-            if my_val == their_val and my_chk == their_chk and my_cnt == their_cnt:
+            if my_val == their_val and my_chk == their_chk:
                 continue # no changes
 
-            if abs(my_cnt - their_cnt) == 1 and h2(my_val ^ their_val) == my_chk ^ their_chk: # only single chnage in subtree
-                if my_cnt > their_cnt: # if we have the extra object, send it
-                    to_send.append(my_val ^ their_val)
+            if h2(my_val ^ their_val) == my_chk ^ their_chk: # only single chnage in subtree
+                extra_val = my_val ^ their_val
+                if extra_val in H: # if we have the extra object, send it
+                    to_send.append(extra_val)
                 continue
 
             # all other cases: we have two different non-trivial subtrees, recurse on both ends
@@ -148,7 +150,7 @@ async def endpoint(H, rx, tx, archive):
         
 def xfer_stat(archive):
     # Each vertex containss 2 128b numbers and one 32b count
-    return (16*2 + 4) * sum( [ len(msg) for msg in archive ] )
+    return (16*2) * sum( [ len(msg) for msg in archive ] )
 
 def reconcile(A, B):
     ab_archive = []
@@ -164,6 +166,9 @@ def reconcile(A, B):
     print("Roundtrips:", len(ab_archive))
     print("Total xfer: %.1f kB" % (xfer/1024))
     print("Per change: %.1f B" % (xfer / (2*CHANGES))) # 2x because CHANGES is per direction
+    # This assumes no of the previous rounds succeed and the big enough one succeeds.
+    print("IBF roundtrips: %d" % int(floor(log2(2*CHANGES))))
+    print("IBF transfer: %.1f B per change" % ( (8+8+4) * int(floor(log2(2*CHANGES)))))
     #print(len(ret_a), ret_a)
     #print(len(ret_b), ret_b)d
     #CHECK CORRECTNESS
