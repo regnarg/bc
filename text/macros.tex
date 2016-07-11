@@ -87,8 +87,11 @@
 \newcommand{\mc}[1]{\multicolumn{1}{c}{#1}}
 
 
-\newcommand{\newterm}[1]{\textit{#1}}
+% Definition/first use of a new term
+\newcommand{\D}[1]{\textbf{#1}}
 
 % for pandoc
 \providecommand{\tightlist}{%
 \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+
+\newcommand\TODO[1]{{\textcolor{purple}{$\langle$\textbf{TODO:} #1$\rangle$}}}
