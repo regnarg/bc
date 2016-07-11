@@ -137,16 +137,60 @@ at least three related but distinct things:
     some filesystems do not internally have any concept of inodes, especially non-Unix
     filesystem like FAT.
 
+Each inode (in all the three senses) has a unique identifier called the **inode number**
+(*ino* for short) that can be read from userspace.
+
 #### Filesystem Access Syscalls
 
-#### Idioms
+Most filesystem syscalls take string paths as an argument. The inode corresponding to the
+path is found in the kernel using a process called **path resolution**.
+<!-- TODO link manpage-->
+The kernel starts at the root inode and for each component of the path walks down the
+corresponding directory entry. This process is inherently non-atomic and if files are
+renamed during path resolution, you might get unexpected results.
 
-### 
+The most important syscalls include:
+
+  * `lstat`(*path*): resolve *path* into an inode and return a structure containing its
+    metadata. Among other things, it contains: type (file/directory/etc.), size, last
+    modification time and inode number.
+  * `unlink`(`"`*dir*`/`*name*`"`): resolve *dir* into an inode, which has to be an existing
+    directory, and remove the directory entry *name* from it. *name* cannot be a directory.
+  * `rmdir`(`"`*dir*`/`*name*`"`): like `unlink` but removes a directory, which must be empty.
+  * `mkdir`(`"`*dir*`/`*name*`"`): create a new directory inode and link it to *dir*
+    as *name*.
+  * `link`(*orig-path*, `"`*new-dir*`/`*new-name*`"`)
+  * `rename`(`"`*orig-dir*`/`*orig-name*`"`, `"`*new-dir*`/`*new-name*`"`): resolve
+    *orig-dir* and *new-dir* to inodes. Then perform the following atomically: remove the
+    *orig-name* directory entry from *orig-dir* and create a new *new-name* directory entry
+    in *new-dir* that refers to the same inode as *orig-name* did. If there was already
+    a *new-name* entry in *new-dir*, replace it atomically (such that there is not gap
+    during the rename when *new-name* does not exist).
+
+When desiring to access the *content* of inodes (e.g. read/write a file or list a directory),
+you must first *open* the inode with an `open`(*path*, *flags*) syscall. `open` resolves
+*path* into an inode and creates an **open file description** (OFD, `struct file`) structure
+in the kernel, which holds information about the open file like the current seek poisition
+or whether it was opened read only. The OFD is tied to the *inode* so that it points always
+to the same inode even if the file is renamed or unlinked while it is opened. The application
+gets returned a **file descriptor** that is used to refer to the OFD in all subsequent
+operations on the opened file. The most common operations are `read`, `write` and `close`,
+with the obvious meanings, and `fstat`, which does a `lstat` on the file's inode without
+any path resolution.
+
+Apart from listing directory contents, directory file descriptors can be used as anchors
+for path resolution. To this end, Linux offers so-called *at* syscalls (`openat`, `renameat`,
+etc.), that instead of one path argument take two arguments: a directory file descriptor
+and a path *relative to that directory*. Such syscalls start path resolution not at the root
+but at the inode referenced by the file descriptor. Thus userspace applications can use
+directory file descriptors as "pointers to inodes". This will later prove crucial
+in elliminating many race conditions.
+
+### Scanning Directory Trees
 
 ### Identifying Inodes
 
-Each inode (in all the three senses) has a unique identifier called the **inode number**
-(*ino* for short). In traditional Linux filesystems like `ext2`, the inode number directly
+. In traditional Linux filesystems like `ext2`, the inode number directly
 corresponds to the physical location of the inode structure (in the third sense) on disk. Thus
 when an inode is deleted, its number may be later reused when another inode occupies the
 same space. That this happens quite commonly can be shown by this simple experiment on an
