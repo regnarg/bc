@@ -195,6 +195,8 @@ in elliminating many race conditions.
 
 ### Identifying Inodes
 
+#### Inode Numbers
+
 \TODO{connect to preceding text when there is any}
 
 For correctly detecting renames, we need to determine that an inode we are currently
@@ -273,6 +275,8 @@ I.e., it is possible for multiple different handles to refer to the same inode,
 which prevents us from simply comparing handles as strings or using them as
 lookup keys in internal databases.
 
+#### The Best of Both Worlds
+
 We propose a reliable inode identification scheme that combines the strengths
 of both inode numbers (stability) and file handles (non-reusability). It works
 as follows: for every known inode, we store both its inode number and a file
@@ -295,6 +299,14 @@ Storing file handles has other benefits, too. For example the stored handle
 allows us to open the inode corresponding to an internal record in our database
 at any time (e.g. when synchronizing file data) free from the race conditions
 of path resolution.
+
+We have solved the inode identification problem for two broad classes of
+filesystems: exportable filesystems and filesystems that do not reuse inode
+numbers. This covers most common file systems that a Linux user encounters,
+with the exception of (client-side) NFS. That is rather unfortunate as it is
+common practice for users to have NFS-mounted home directories in schools
+and larger organizations. This issue should certainly be given attention
+in further works but it seems likely that it will require kernel changes.
 
 ## Online Change Detection
 
