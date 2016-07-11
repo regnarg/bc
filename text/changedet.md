@@ -68,7 +68,7 @@ Offline Change Detection
 
 Before diving into change detection, we have to understand a bit about the structure
 of Linux filesystems and filesystem APIs. If terms like *inode*, *hardlink*,
-and *file descriptor* are familiar to you, you can safely skip this section.
+*file descriptor*, and `openat` are familiar to you, you can safely skip this section.
 Most of what is being said here applies to all Unix-based operating systems,
 however, some details might be specific to Linux.
 
@@ -102,7 +102,7 @@ directories store a reference to their parent (as a special directory entry call
 This explains many otherwise perplexing (especially for newcomers to the Unix world)
 facts:
 
-\newcommand{\pfact}[2]{\noident \textbf{Perplexing fact:} #1\\\textbf{Explanation:} #2}
+\newcommand{\pfact}[2]{\noindent \textbf{Perplexing fact:} #1\\\textbf{Explanation:} #2}
 
   * \pfact{The syscall used to delete a file is called `unlink`.}
     {It does not in fact delete
@@ -112,7 +112,7 @@ facts:
   * \pfact{It is possible to delete a file that is opened by
     a process. That process can happily continue using the file.}
     {Inodes in kernel are reference counted. Only when all in-kernel
-    references to the inode are gone *and* the inode has no links, it is physically
+    references to the inode are gone \textit{and} the inode has no links, it is physically
     deleted.}
 
   * \pfact{To rename or delete a file, you do not need write
@@ -193,7 +193,7 @@ but at the inode referenced by the file descriptor. Thus userspace applications 
 directory file descriptors as "pointers to inodes". This will later prove crucial
 in elliminating many race conditions.
 
-### Scanning a Single File
+### Change Detection in a Single File
 
 Let's start off with something trivial: detecting changes in a single file.
 First we need to decide what to store as internal state. Against that internal
@@ -228,8 +228,45 @@ will have to deal with the race conditions. This will be discussed later.
 
 ### Scanning a Single Directory
 
+For a single directory, we can simply store a mapping from names to (size, mtime)
+tuples as the state.
 
-### Scanning Directory Trees
+To read a directory, an application calls the `getdents` syscall (usually
+through the `readdir` wrapper from the standard C library), passing it a
+directory file dectriptor and a buffer. The kernel fills the buffer with
+directory entries (each consisting of a name, inode number and usually
+the type of the inode). When the contents of the directory do not fit into
+the buffer, subsequent calls return additional entries.
+
+We can hit a race condition in several places when entries in the directory are
+renamed during scanning:
+
+  * Between two calls to `getdents`. The directory inode is locked for the
+    duration of the `getdents` so everything returned by one call should
+    be consistent. However, a rename may happen between two `getdents`
+    calls. In that case, it is not defined whether we will see the old name,
+    the new name, both or neither.
+    \TODO{Cite http://yarchive.net/comp/linux/readdir\_nonatomicity.html
+    or a more direct LKML archive}
+    The last case is particulary unpleasant because we might mistakenly mark
+    a renamed file as deleted.
+
+    This can be mitigated by using a buffer large enough to hold all the
+    directory entries. This could be achieved for example by doubling the
+    buffer size until we managed to read everything in one go. However,
+    trying to do this for large directories could keep the inode locked
+    for unnecesary long. A better solution will be proposed later using
+    a combination of online and offline change detection.
+
+  * Between `getdents` and `lstat` (or similar). Because `getdents` returns
+    only limited information about a file, we need to call `lstat` for each
+    entry to find size and mtime. Between those to calls, the entry might
+    get renamed (causing `lstat` to fail) or replaced (causing it to return
+    a different inode). Both cases can be detected (the latter by comparing
+    inode number from `lstat` with inode number from `getdents64`) and the
+    scan can be retried after a random delay.
+
+### Scanning a Directory Tree
 
 \TODO{}
 
