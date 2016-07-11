@@ -39,6 +39,7 @@ EVENT_MODIFY = 5 # a file's content was modified
 class FanotifyWatcher:
     MASK = FAN_CLOSE_WRITE | FAN_MODIFY_DIR | FAN_ONDIR # FAN_OPEN
     SCAN_QUEUE_SIZE = 1000
+    FANOTIFY_INTERVAL = 5
     def __init__(self, dir):
         #if not is_mountpoint(dir):
         #    err("Watched directory '%s' must be a mountpoint."
@@ -82,7 +83,17 @@ class FanotifyWatcher:
         # internal databases).
         self.fan.watch(None, self.MASK, FAN_MARK_ADD|FAN_MARK_IGNORED_MASK,
                 dfd=self.store.meta_fd)
-        self.loop.add_reader(self.fan.fileno(), self.on_fanotify_readable)
+        #self.loop.add_reader(self.fan.fileno(), self.on_fanotify_readable)
+
+    async def fanotify_worker(self):
+        fan_fd = self.fan.fileno()
+        while True:
+            log.debug("fanotify_worker selecting")
+            await async_wait_readable(fan_fd)
+            log.debug("fanotify_worker readable")
+            self.on_fanotify_readable()
+            log.debug("fanotify_worker sleeping")
+            await asyncio.sleep(self.FANOTIFY_INTERVAL)
 
     def do_delete_inode(self, iid):
         """Delete a given inode from database. Use when sure the original inode no longer exists.
@@ -211,14 +222,12 @@ class FanotifyWatcher:
             # the event loop a chance to run.
             await asyncio.sleep(0) # https://github.com/python/asyncio/issues/284
 
-    async def fanotify_worker(self):
-        pass
-
     def init(self):
         log.debug("init")
         self.init_fanotify()
         self.check_root()
         self.loop.create_task(self.scan_worker())
+        self.loop.create_task(self.fanotify_worker())
 
     def main(self):
         self.init()

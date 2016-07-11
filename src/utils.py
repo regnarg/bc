@@ -1,5 +1,6 @@
 import sys, os, time
 import uuid
+import asyncio
 import binascii
 from functools import *
 from collections import *
@@ -260,6 +261,16 @@ def ipy():
     with stdio_to_tty():
         shell = InteractiveShellEmbed.instance()
         shell(local_ns=frame.f_locals, global_ns=frame.f_globals)
+
+def async_wait_readable(fd):
+    loop = asyncio.get_event_loop()
+    fut = asyncio.Future()
+    def cb():
+        fut.set_result(None)
+        loop.remove_reader(fd)
+    loop.add_reader(fd, cb)
+    return fut
+
 
 try:
     # Live debugging on exception using IPython/ipdb
