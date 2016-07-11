@@ -102,26 +102,28 @@ directories store a reference to their parent (as a special directory entry call
 This explains many otherwise perplexing (especially for newcomers to the Unix world)
 facts:
 
-  * \noindent{}**Perplexing fact:** The syscall used to delete a file is called `unlink`.\
-    **Explanation:** It does not in fact delete
+\newcommand{\pfact}[2]{\noident \textbf{Perplexing fact:} #1\\\textbf{Explanation:} #2}
+
+  * \pfact{The syscall used to delete a file is called `unlink`.}
+    {It does not in fact delete
     a file (inode), but merely removes one link to it. Only when all links to
-    an inode are removed, it is deleted.
+    an inode are removed, it is deleted.}
 
-  * \noindent{}**Perplexing fact:** It is possible to delete a file that is opened by
-    a process. That process can happily continue using the file.\
-    **Explanation:** Inodes in kernel are reference counted. Only when all in-kernel
+  * \pfact{It is possible to delete a file that is opened by
+    a process. That process can happily continue using the file.}
+    {Inodes in kernel are reference counted. Only when all in-kernel
     references to the inode are gone *and* the inode has no links, it is physically
-    deleted.
+    deleted.}
 
-  * \noindent{}**Perplexing fact:** To rename or delete a file, you do not need write
-    permissions (or in fact, any permissions) to that file, only to the parent directory.\
-    **Explanation:** These operations do not touch the file inode
+  * \pfact{To rename or delete a file, you do not need write
+    permissions (or in fact, any permissions) to that file, only to the parent directory.}
+    {These operations do not touch the file inode
     at all, they change only the parent directory inode (by adding/removing directory
-    entries).
+    entries).}
 
-  * \noindent{}**Perplexing fact:** Renaming a file updates the last modification time
-    of the parent directory, not the file.\
-    **Explanation:** Same as above.
+  * \pfact{Renaming a file updates the last modification time
+    of the parent directory, not the file.}
+    {Same as above.}
 
 
 \noindent
@@ -159,13 +161,15 @@ The most important syscalls include:
   * `rmdir`(`"`*dir*`/`*name*`"`): like `unlink` but removes a directory, which must be empty.
   * `mkdir`(`"`*dir*`/`*name*`"`): create a new directory inode and link it to *dir*
     as *name*.
-  * `link`(*orig-path*, `"`*new-dir*`/`*new-name*`"`)
   * `rename`(`"`*orig-dir*`/`*orig-name*`"`, `"`*new-dir*`/`*new-name*`"`): resolve
     *orig-dir* and *new-dir* to inodes. Then perform the following atomically: remove the
     *orig-name* directory entry from *orig-dir* and create a new *new-name* directory entry
     in *new-dir* that refers to the same inode as *orig-name* did. If there was already
     a *new-name* entry in *new-dir*, replace it atomically (such that there is not gap
     during the rename when *new-name* does not exist).
+  * `link`(*orig-path*, `"`*new-dir*`/`*new-name*`"`): create a new hardlink to
+    an existing inode. Unlike `rename`, this does not allow overwriting the
+    target name if it already exists.
 
 When desiring to access the *content* of inodes (e.g. read/write a file or list a directory),
 you must first *open* the inode with an `open`(*path*, *flags*) syscall. `open` resolves
@@ -181,17 +185,53 @@ with the obvious meanings, and `fstat`, which does a `lstat` on the file's inode
 any path resolution.
 
 Apart from listing directory contents, directory file descriptors can be used as anchors
-for path resolution. To this end, Linux offers so-called *at* syscalls (`openat`, `renameat`,
+for path resolution. To this end, Linux offers so-called \D{at-syscalls} (`openat`,
+`renameat`,
 etc.), that instead of one path argument take two arguments: a directory file descriptor
 and a path *relative to that directory*. Such syscalls start path resolution not at the root
 but at the inode referenced by the file descriptor. Thus userspace applications can use
 directory file descriptors as "pointers to inodes". This will later prove crucial
 in elliminating many race conditions.
 
+### Scanning a Single File
+
+Let's start off with something trivial: detecting changes in a single file.
+First we need to decide what to store as internal state. Against that internal
+state we shall be comparing the file upon the next scan. One option is to store
+a checksum (e.g. MD5) of the file's content. However, this makes scans rather
+slow, as they have to read the complete content of each file.  This is
+unfortunate as today's file collections often contain many large files that
+rarely ever change (e.g. audio and video files).
+
+A more viable alternative takes inspiration from the famous `rsync` \TODO{link}
+file transfer program. It consists of storing the size and last modification
+time (*mtime*) of each file and comparing those. This may be unreliable for
+several reasons:
+
+  * It is possible to change mtime from userspace (possibly to an earlier value)
+    and some applications do so.
+  * mtime might not be updated if a power failure happens during write.
+  * mtime updates might be delayed for writes made via a memory mapping.
+  * Many filesystems store mtimes with second granularity. This means that if
+    the file was updated after we scanned it but in the same second, we wouldn't
+    notice it during next scan.
+
+Most of these problems should be fairly unlikely or infrequent and the massive
+success of `rsync` attests that this approach is good enough for most practical
+uses.
+
+Moreover, size and mtime can be acquired atomically while computing checksums
+might give inconsistent results if the file is being concurrently updated.
+We can still store checksums for consistency checking purposes  but it is
+sufficient to update them only when the (size, mtime) tuple changes and we
+will have to deal with the race conditions. This will be discussed later.
+
+### Scanning a Single Directory
+
+
 ### Scanning Directory Trees
 
-<!-- rename races -->
-<!-- inode-sort optimizaton -->
+\TODO{}
 
 ### Identifying Inodes
 
@@ -218,7 +258,7 @@ on ext2/3/4 filesystems:
     12 second
 
 Both files got inode number 12 despite being completely unrelated.
-In other filesystems (e.g. `btrfs`), the inode number is simply a sequentially
+In other filesystems (e.g. btrfs), the inode number is simply a sequentially
 assigned identifier and numbers are not reused until necessary (usually never, because
 inode numbers can be 64-bit so overflow is unlikely).
 
