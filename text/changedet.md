@@ -37,7 +37,8 @@ filesystem can diverge from reality over time. The only way of fixing this is
 with a full rescan of the directory tree. Thus while being efficient, online
 change detection is usually not very robust. In contrast, offline change
 detection is by definition 100% reliable, because it looks at the actual current
-state of the file system and updates internal structures accordingly.
+state of the file system and updates internal structures accordingly. Actually,
+that is also not exactly true, as we shall see later.
 
 There also emerges an interesting middle ground between these two extremes,
 which we shall dub \D{filesystem-based change detection}.  Some filesystems
@@ -263,23 +264,28 @@ renamed during scanning:
     entry to find size and mtime. Between those to calls, the entry might
     get renamed (causing `lstat` to fail) or replaced (causing it to return
     a different inode). Both cases can be detected (the latter by comparing
-    inode number from `lstat` with inode number from `getdents64`) and the
+    inode number from `lstat` with inode number from `getdents`) and the
     scan can be retried after a random delay.
 
-### Scanning a Directory Tree
+There is one other problem: when a file is renamed, it would be detected as
+deletion of the original file and creation of a new on with the same content (or
+just similar, if it was both renamed and changed between scans). Unless the data
+synchonization algorithm can reuse blocks from other files for delta transfers,
+this would force retransmission of the whole file.
 
-\TODO{}
+To correctly detect renames, we would need a way to detect that a name we
+currently encountered during the scan refers an inode that we know from earlier
+scans, perhaps under a different name. For this to be possible, we need to be
+able to assign some kind of unique identifiers to inodes that are stable,
+non-reusable and independent of their names.
 
 ### Identifying Inodes
 
 #### Inode Numbers
 
-\TODO{connect to preceding text when there is any}
-
-For correctly detecting renames, we need to determine that an inode we are currently
-exploring is the same as an inode we have previously seen. The first thing that naturally
-comes to mind is to use inode numbers. But inode numbers can be reused when an inode
-is deleted and a new one is later created.
+The first natural candidate for an inode identifier is of course the inode
+number. But inode numbers can be reused when an inode is deleted and a new one
+is later created.
 
 This typically happens on filesystems where inode numbers correspond to on-disk locations.
 When a new inode is created in the same space, it gets the same number. This happens farily
@@ -364,7 +370,7 @@ Whenever we encounter an inode during a scan, we look up its inode number in
 our database. If a record is found, we fetch the stored handle and try to
 open it with `open_by_handle_at`. If that succeeds, the original inode still
 exists and thus its inode number has not been reused. At this point, we can
-be sure that the inode we encountered during scan correspond the the record
+be sure that the inode we encountered during scan corresponds to the record
 just found in our database. If we found it at a different path than last time,
 we can record this as a rename.
 
@@ -384,6 +390,10 @@ with the exception of (client-side) NFS. That is rather unfortunate as it is
 common practice for users to have NFS-mounted home directories in schools
 and larger organizations. This issue should certainly be given attention
 in further works but it seems likely that it will require kernel changes.
+
+### Scanning a Directory Tree
+
+\TODO{}
 
 ## Online Change Detection
 
