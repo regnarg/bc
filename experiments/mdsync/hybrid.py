@@ -149,7 +149,7 @@ async def endpoint(H, rx, tx, archive):
                 
         
 def xfer_stat(archive):
-    # Each vertex containss 2 128b numbers and one 32b count
+    # Each vertex containss 2 128b numbers
     return (16*2) * sum( [ len(msg) for msg in archive ] )
 
 def reconcile(A, B):

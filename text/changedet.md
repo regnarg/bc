@@ -38,7 +38,8 @@ with a full rescan of the directory tree. Thus while being efficient, online
 change detection is usually not very robust. In contrast, offline change
 detection is by definition 100% reliable, because it looks at the actual current
 state of the file system and updates internal structures accordingly. Actually,
-that is also not exactly true, as we shall see later.
+that is true only if the filesystem is not changed during the scan, as we shall
+see later.
 
 There also emerges an interesting middle ground between these two extremes,
 which we shall dub \D{filesystem-based change detection}.  Some filesystems
@@ -285,12 +286,9 @@ non-reusable and independent of their names.
 
 The first natural candidate for an inode identifier is of course the inode
 number. But inode numbers can be reused when an inode is deleted and a new one
-is later created.
-
-This typically happens on filesystems where inode numbers correspond to on-disk locations.
-When a new inode is created in the same space, it gets the same number. This happens farily
-often, for example this simple experiment quite reliably reproduces inode number reuse
-on ext2/3/4 filesystems:
+is later created. This happens farily often, for example this simple experiment
+quite reliably reproduces inode number reuse on an otherwise quier ext4
+filesystem:
 
     $ echo "first file" >first
     $ ls -i
@@ -305,9 +303,9 @@ In other filesystems (e.g. btrfs), the inode number is simply a sequentially
 assigned identifier and numbers are not reused until necessary (usually never, because
 inode numbers can be 64-bit so overflow is unlikely).
 
-Thus at least on some filesystems, including ext2/3/4, the most common filesystem in the
-Linux world, inode numbers cannot be used to reliably match inodes between offline scans.
-Is there a better way?
+Thus at least on some filesystems, including ext4, one of the most common
+filesystems in the Linux world, inode numbers cannot be used to reliably match
+inodes between offline scans.  Is there a better way?
 
 #### Enter Filehandles
 
@@ -338,7 +336,7 @@ be unique for the lifetime of the filesystem.
 
 Not all filesystems support file handles. Those that do are called
 \D{exportable} (*exporting* is the traditional term for sharing a filesystem
-over NFS). Most common local filesystems (e.g. ext2/3/4, btrfs, even non-Unix
+over NFS). Most common local filesystems (e.g. ext4, btrfs, even non-Unix
 filesystems like NTFS) are exportable. On the other hand, NFS itself, for
 example, is not.
 
@@ -393,7 +391,103 @@ in further works but it seems likely that it will require kernel changes.
 
 ### Scanning a Directory Tree
 
-\TODO{}
+#### Internal state
+
+When scanning directory trees, we definitely do not want to store the full path
+to each object. If we did and a large directory was renamed, we would need to
+individually update the path of every file in its subtree\dots and probably
+transfer all those updates during synchronization, unless additional tricks are
+used.
+
+Instead, we will choose a tree-like representation that closely mimics the
+underlying filesystem structure. The internal state preserved between scans
+consists of:
+
+  * A list of inodes, each storing:
+      - A so-called \D{IID}, a random unique identifier assigned upon first
+        seeing this inode.
+      - Inode number and filehandle as dicussed above, with fast lookups
+        by inode number possible.
+      - Last modification time, for files also size.
+  * For every directory inode, a list of its children as a mapping from
+    basenames to IIDs.
+
+This way, when a large directory is renamed, it suffices to remove one directory
+entry from the original parent and add one directory entry to the new parent,
+requiring a constant number of updates to the underlying store.
+
+#### Speed
+
+Scanning large directory trees is slow, especially on rotational drives like
+hard disks. The main contributor to this is seek times. We are accessing
+inodes, each several hundred bytes in size, in essentialy random order. If
+you wanted to get the worst possible performance from a hard disk, you probably
+could not do much better than this.
+
+This problem is aggravated by the structure of the ext4 filesystem. In ext4,
+the disk is split into equally-sized regions called \D{block groups}. Each
+block group contains both inode metadata and data blocks for a set of files.
+\TODO{block groups ref: https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/tree/Documentation/filesystems/ext2.txt?id=c290ea01abb7907fde602f3ba55905ef10a37477#n85}
+
+![ext4 block group layout (not to scale)\label{bg}](img/blockgroup.pdf){#fig:bg}
+
+The dark bands represent areas storing inodes, the white are data blocks. Also
+note that this picture is quite out of scale. The default block group size
+is 2$\,$GB,[^flexbg] so on a 1$\,$TB partition there will be approximately 500
+block groups. This makes inodes literally scattered all over the disk.
+
+[^flexbg]: The default was 128$\,$MB for ext2/3. Acutally, ext4 block groups are
+still 128$\,$MB by default but they are grouped into larger units called \D{flex
+groups} (16 block groups per flex group by default), with inode metadata
+for the whole flex group stored at its beginning.
+
+This layout improves performance for most of the normal filesystem access
+patterns (by improving locality between metadata and data blocks). However,
+scanning the whole filesystem is not one of them.
+
+Not all filesystems are like this. For example, NTFS keeps all file metadata in
+one contiguous region called the Master File Table (MFT) at the beginning of the
+partition. This allows the existence of tools like SwiftSearch \TODO{link}  that
+read and parse the whole raw MFT in several seconds (bypassing the operating
+system) and then allow instantaneous searches for any file by name, no previous
+indexing required.
+
+\TODO{explore packed\_meta\_block mke2fs option}
+
+Nothing like this can be done for ext4. Just reading all the raw inode regions
+will include a lot of seeks and takes tens of seconds to minutes, as seen in the
+table below.
+
+
+In ext4 and many other filesystems, the inode number directly corresponds to
+the location of the inode structure on disk. Because of the block group
+structure, the mapping is not linear but it is monotonic.  Therefore, if we
+access inodes in inode number order, the access will be sequential inside
+each block group (with perhaps only a few gaps for recently deleted inodes).
+
+We can for example do the scan using a breadth-first search with a priority
+queue ordered by inode number. We know the inode number from `getdents`
+without `stat`-ing the inode itself 
+
+##### Faster rescans
+
+For the second and further scans, we can do even better. Linux stores a
+modification time for directories as well as for files. The modification time
+of a directory is the last time a direct child is added to it or removed from
+it. Thus we can simply iterate over the directory records from our database
+in inode nubmer order. We open each of them using the saved file handle, which
+encodes the inode number and thus the location of the inode on disk.
+We can then `fstat` the opened directory, which directly accesses this location,
+without any path resolution steps that would require the kernel to look up
+directory entries in parent directories.
+
+This way, we access only inode metadata blocks (the gray areas in [@fig:bg]) and
+not directory content blocks, which are stored in the white data sections. This
+further reduces seeking.
+
+\TODO{measurement table}
+
+#### Race Conditions
 
 ## Online Change Detection
 
