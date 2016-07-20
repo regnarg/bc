@@ -228,7 +228,7 @@ We can still store checksums for consistency checking purposes  but it is
 sufficient to update them only when the (size, mtime) tuple changes and we
 will have to deal with the race conditions. This will be discussed later.
 
-### Scanning a Single Directory
+### Scanning a Single Directory                     {#sec:singledir}
 
 For a single directory, we can simply store a mapping from names to (size, mtime)
 tuples as the state.
@@ -488,6 +488,26 @@ further reduces seeking.
 \TODO{measurement table}
 
 #### Race Conditions
+
+Tree scanning presents numerous opportunities for race conditions. Some were
+already discussed in [@sec:singledir]. But the most serious threat is a file
+being moved from one directory to another during the scan. To be more precise,
+from a directory that we have not yet scanned to one that we have. We would
+completely miss such a file from the scan and might mistakenly consider it
+deleted.
+
+As the whole scan may take several minutes, it is quite easy for this to
+happen.
+
+It cannot be detected or mitigated in any easy way with offline techniques
+alone. However, we can use an online detection mechanism during the scan.
+Then, if any changes to the filesystem happen while scanning, the kernel will
+tell us about them and we can for example rescan the few affected directories.
+
+Even if we are not interested in long-term realtime change monitoring, it pays
+to set up online change detection even if only for the duration of the scan.
+It is the only way we know of of mitigating such race conditions without
+support of the filesystem (e.g. in the form of atomic snapshots).
 
 ## Online Change Detection
 
