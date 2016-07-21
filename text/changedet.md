@@ -389,7 +389,7 @@ common practice for users to have NFS-mounted home directories in schools
 and larger organizations. This issue should certainly be given attention
 in further works but it seems likely that it will require kernel changes.
 
-### Scanning a Directory Tree
+### Scanning a Directory Tree                               {#sec:dirtree}
 
 #### Internal state
 
@@ -578,27 +578,59 @@ I have access to, both system and data, destop and server.
 And if we scan only directories, a file might be modified during the watch setup
 phase (if it takes over a minute, it is not unlikely) and we would miss such change.
 Therefore it is probably better to do a full rescan when setting up inotify watches.
+We can do both the rescan and watch creation in a single pass over the inodes, as
+shown in alg. \ref{alg:inotify-watch}, a slight variation on \textsc{Recheck-All}.
 
 <!-- http://tex.stackexchange.com/questions/1375/what-is-a-good-package-for-displaying-algorithms-->
 
 \begin{algorithm}
-  \caption{Inotify watch creation with rescan
+  \caption{Inotify watch creation with recheck
     \label{alg:inotify-watch}}
   \begin{algorithmic}[1]
-    \ForEach{inode in our database, in inode number order}
-        \State Try to open its saved handle
-        \IIf{it fails} skip the inode and remove it from database.
+    \ForEach{record \I{rec} in inode database, ordered by inode number}
+        \State \I{fd} $\gets$ \verb+open_handle+(\I{rec}$.$\I{handle})
+        \IIf{it fails} skip the inode and remove it from database
+        \State Add \I{fd} to the inotify watch list
+        \State \textsc{Recheck}(\I{rec}, \I{fd})
     \End
   \end{algorithmic}
 \end{algorithm}
 
+And the two mechanisms beautifully complement each other: the scanning tells us
+about any changes that ocurred before we encountered a given dirctory, while inotify
+tell us of any changes that happened during or after scanning that directory. This
+way we have also solved the race condition mentioned in [@sec:dirtree]. If a file
+is renamed during scan from a not-yet-scanned  directory to an already-scanned directory,
+we will get an inotify event for the target directory as we have already
+added it to the watch list.
 
 When an event is received, it is fairly trivial to update our internal structures
 accordingly.
 
+Thus the first online monitoring API turned up to be more useful for offline monitoring,
+whose problems it can fix with negligible slowdown.
+
+However, for regular long-term monitoring, the requirement of a minute-long scan with
+100$\,$ disk load (during which your system will be rather slow) will be unpleasant.
+We do not want to end up like many Windows users who have to wait a minute or more after
+login for all the accumulated autostart programs to load before their system becomes
+usable.
+
+An alternative would be to perform the scan slowly, at low priority, perhaps even with
+short pauses. However, that would increase the time before we start synchronizing files
+to perhaps 5 minutes.
+
+Another consideration is that the inotify watch list and the watched inodes (which cannot
+be dropped from the inode cache because they are referenced by the watch list) consume
+non-swappable kernel memory. This would not be a problem for most user as the amount
+is approximately 0.5$\,$kB per directory. It would be a problem for extremely large directory
+trees (hundreds of thousands of directories and more) but in such cases the scan times
+would probably be the more serious issue.
+
 ### Fanotify
 
 ### The `FAN_MODIFY_DIR` Kernel Patch
+
 
 ### Other Methods
 
