@@ -24,7 +24,7 @@ def str_to_handle(s):
         raise ValueError("invalid handle: '%s'" % s)
     return FileHandle(tp, data)
 
-def rescan(*, order='orig', use_handles=False):
+def rescan(*, order='orig', use_handles=False, only_dir=False):
     with open('inos.json') as fd:
         data = json.load(fd)
     check_call(['sysctl', '-w', 'vm.drop_caches=3'])
@@ -39,7 +39,8 @@ def rescan(*, order='orig', use_handles=False):
 
     errors = 0
     start = clock_gettime(CLOCK_MONOTONIC)
-    for ino, handle, fn in data:
+    for ino, handle, type, fn in data:
+        if only_dir and type!= 'd' and type != "b'd'": continue
         try:
             if use_handles:
                 fd = open_by_handle_at(root_fd, str_to_handle(handle), os.O_PATH)
@@ -53,8 +54,8 @@ def rescan(*, order='orig', use_handles=False):
     return end-start, errors
 
 
-for order in ['orig', 'ino', 'rand']:
-    for use_handles in [False, True]:
-        time, errors = rescan(order=order, use_handles=use_handles)
-        print("%-4s %1d %.1f %d" % (order, use_handles, time, errors))
-
+for only_dir in [True, False]:
+    for order in ['ino', 'orig', 'rand']:
+        for use_handles in [False, True]:
+            time, errors = rescan(order=order, use_handles=use_handles, only_dir=only_dir)
+            print("%-4s %1d %.1f %d" % (order, use_handles, time, errors))

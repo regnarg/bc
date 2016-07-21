@@ -90,8 +90,17 @@
 % Definition/first use of a new term
 \newcommand{\D}[1]{\textbf{#1}}
 
+% indent in pseudocode
+\renewcommand{\I}[0]{$\qquad$}
+
 % for pandoc
 \providecommand{\tightlist}{%
 \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
 
 \newcommand\TODO[1]{{\textcolor{purple}{$\langle$\textbf{TODO:} #1$\rangle$}}}
+\renewcommand{\algorithmicif}{\textbf{If}}
+\algblockdefx[ForEach]{ForEach}{End}[1]{\textbf{For each} #1:}{}
+\algblockdefx[If]{If}{End}[1]{\textbf{If} #1:}{}
+\algnewcommand{\IIf}[1]{\State\algorithmicif\ #1: }
+\algtext*{End}
+

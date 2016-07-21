@@ -99,8 +99,13 @@ Abstract.
 \hypersetup{pdfkeywords=\Keywords}
 \hypersetup{urlcolor=blue}
 
+\usepackage[noend]{algpseudocode} % requires texlive-science
+\usepackage{algorithm}
+
 % Definitions of macros (see description inside)
 \include{macros}
+
+\usepackage{longtable}
 
 % Title page and various mandatory informational pages
 \begin{document}
@@ -147,6 +152,7 @@ Abstract.
 %%% source code, data files, interactive charts, etc.). Electronic attachments
 %%% should be uploaded to SIS and optionally also included in the thesis on a~CD/DVD.
 \chapwithtoc{Attachments}
+
 
 \openright
 \end{document}

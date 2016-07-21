@@ -9,7 +9,7 @@ import binascii
 r = []
 
 root = sys.argv[1]
-proc = Popen(["find", root, "-xdev", "-printf", "%i %p\\n"], stdout=PIPE)
+proc = Popen(["find", root, "-xdev", "-printf", "%i %y %p\\n"], stdout=PIPE)
 
 def handle_to_str(fh):
     """Return a string representation of a file handle."""
@@ -26,14 +26,15 @@ def str_to_handle(s):
 
 for line in proc.stdout:
     line = line.rstrip(b'\n')
-    ino, fn = line.split(b' ', 1)
+    ino, type, fn = line.split(b' ', 2)
     ino = int(ino)
+    type = type.decode('ascii')
     try: fn = fn.decode('utf-8')
     except UnicodeDecodeError:
         print("Invalid UTF-8:", ascii(fn))
         continue
     handle, mntid = name_to_handle_at(AT_FDCWD, fn)
-    r.append((ino,handle_to_str(handle),fn))
+    r.append((ino,handle_to_str(handle),type,fn))
 
 with open('inos.json', 'w') as fd:
     json.dump(r, fd,indent=2)

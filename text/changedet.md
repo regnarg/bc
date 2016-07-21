@@ -485,7 +485,31 @@ This way, we access only inode metadata blocks (the gray areas in [@fig:bg]) and
 not directory content blocks, which are stored in the white data sections. This
 further reduces seeking.
 
-\TODO{measurement table}
+Order    Access by      Test 1
+-------  -------------  -------
+scan     path           \TODO{}
+         handle         \TODO{}
+inode    path           \TODO{}
+         handle         \TODO{}
+random   path           \TODO{}
+         handle         \TODO{}
+-------  -------------  -------
+
+: Scan times for different access strategies. {#tbl:scantimes}
+
+[@Tbl:scantimes] shows times (in minutes and seconds) necessary to `lstat` all
+the inodes on a filesystem for different access orders (*scan* is the order
+of a depth-first traversal that visits children in the order returned by
+`getdents`, *inode* is ascending inode number order and *random* is a completely
+random shuffle of all the inodes) and different access methods (by path or
+by handle).
+
+We experimented with several other techniques, for example massively
+parallelizing the scan in the hope that the kernel and/or hard disk controller
+will order the requests themselves in an optimal fashion. However, most of
+these attempts yielded results worse than a naive scan so they would not be
+discussed further.
+
 
 #### Race Conditions
 
@@ -511,9 +535,68 @@ support of the filesystem (e.g. in the form of atomic snapshots).
 
 ## Online Change Detection
 
-### `inotify`
+### Inotify
 
-### `fanotify`
+Inotify\TODO{link manpage} is the most widely used Linux filesystem monitoring API.
+It is currently used by virtually all applications that wish to detect filesystem
+changes: synchronization tools, indexers and similar.
+
+When using inotify, a process must first create a \D{watch list} -- a list of inodes
+that it wants to monitor. Inodes are added to the watch list using paths (file descriptors
+may be added using the `/proc/self/fd` trick) but once added, the kernel keeps direct
+reference to the inode.
+
+Inotify supports reporting all the usual filesystem events (writes, creations, renames,
+unlink) and several less usual ones (opens, closes and reads). Events are generated
+for all inodes on the watch list and (in case of directories) their direct children.
+This holds true even for events that do not touch the directory inode, like writes
+to a file inside a watched directory.
+
+Inotify assigns a unique cookie called the \D{watch descriptor} to every inode on the
+watch list. This watch descriptor is then returned with events concerning this inode.
+In case of directory-changing events (creations, renames and unlinks), a basename
+of the affected file is returned alongside the watch descriptor of the directory. We
+can simply keep a mapping from watch tables to IIDs or some other kind of internal
+identifiers. This also gives us access to the file handle if a race-free access to
+the affected inode is necessary.
+
+However, there is one catch: inotify monitoring is not recursive. If you wish
+to watch a directory tree, you have to add every single directory in the tree
+to the watch list. For an inode to be added to the watch list, it must be first
+looked up and read from the disk. This makes creating the watch list comparably
+slow to a rescan and allows us to use the same optimizations as for scans to
+make it a little bit less slow.
+
+At the first glance, an additional advantage may be seen in the fact that we
+need access only directories and can simply skip over all file inodes.
+However, when directories make up $10\,\%$ of the inodes[^numdirs], accessing
+all directories in inode order is not even 2 times faster than a full scan.
+
+[^numdirs]: This number is approximately true for all the various filesystems
+I have access to, both system and data, destop and server.
+
+And if we scan only directories, a file might be modified during the watch setup
+phase (if it takes over a minute, it is not unlikely) and we would miss such change.
+Therefore it is probably better to do a full rescan when setting up inotify watches.
+
+<!-- http://tex.stackexchange.com/questions/1375/what-is-a-good-package-for-displaying-algorithms-->
+
+\begin{algorithm}
+  \caption{Inotify watch creation with rescan
+    \label{alg:inotify-watch}}
+  \begin{algorithmic}[1]
+    \ForEach{inode in our database, in inode number order}
+        \State Try to open its saved handle
+        \IIf{it fails} skip the inode and remove it from database.
+    \End
+  \end{algorithmic}
+\end{algorithm}
+
+
+When an event is received, it is fairly trivial to update our internal structures
+accordingly.
+
+### Fanotify
 
 ### The `FAN_MODIFY_DIR` Kernel Patch
 
