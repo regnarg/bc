@@ -1,3 +1,11 @@
+## tdata (ext4, 2M inodes)
+
+ino  0 74.7 0
+ino  1 82.2 0
+orig 0 108.3 0
+orig 1 254.9 0
+rand 0 694.8 0
+
 ## kerio /home (ext3, 2M inodes)
 
 orig 0 330.6 0
