@@ -1,40 +1,26 @@
 diff --git a/fs/namei.c b/fs/namei.c
-index 9c590e0..f2c2295 100644
+index ad74877e1442..1a2fda243589 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
-@@ -2928,8 +2928,11 @@ static int atomic_open(struct nameidata *nd, struct dentry *dentry,
- 			dput(dentry);
- 			dentry = file->f_path.dentry;
- 		}
--		if (*opened & FILE_CREATED)
-+		if (*opened & FILE_CREATED) {
-+			struct path parent_path = {file->f_path.mnt, dentry->d_parent};
- 			fsnotify_create(dir, dentry);
-+			fsnotify_modify_dir(&parent_path);
-+		}
- 		if (!dentry->d_inode) {
- 			WARN_ON(*opened & FILE_CREATED);
- 			if (create_error) {
-@@ -2951,8 +2954,10 @@ static int atomic_open(struct nameidata *nd, struct dentry *dentry,
- 	 */
- 	acc_mode = op->acc_mode;
- 	if (*opened & FILE_CREATED) {
-+		struct path parent_path = {file->f_path.mnt, dentry->d_parent};
- 		WARN_ON(!(open_flag & O_CREAT));
- 		fsnotify_create(dir, dentry);
-+		fsnotify_modify_dir(&parent_path);
- 		acc_mode = 0;
- 	}
- 	error = may_open(&file->f_path, acc_mode, open_flag);
-@@ -3066,6 +3071,7 @@ static int lookup_open(struct nameidata *nd, struct path *path,
- 				   nd->flags & LOOKUP_EXCL);
+@@ -3010,7 +3010,9 @@ static int atomic_open(struct nameidata *nd, struct dentry *dentry,
+ 				dentry = file->f_path.dentry;
+ 			}
+ 			if (*opened & FILE_CREATED)
++				struct path parent_path = {file->f_path.mnt, dentry->d_parent};
+ 				fsnotify_create(dir, dentry);
++				fsnotify_modify_dir(&parent_path);
+ 			if (unlikely(d_is_negative(dentry))) {
+ 				error = -ENOENT;
+ 			} else {
+@@ -3157,6 +3159,7 @@ static int lookup_open(struct nameidata *nd, struct path *path,
  		if (error)
  			goto out_dput;
+ 		fsnotify_create(dir_inode, dentry);
 +		fsnotify_modify_dir(&nd->path);
  	}
- out_no_open:
- 	path->dentry = dentry;
-@@ -3637,6 +3643,7 @@ retry:
+ 	if (unlikely(create_error) && !dentry->d_inode) {
+ 		error = create_error;
+@@ -3702,6 +3705,7 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, umode_t, mode,
  			error = vfs_mknod(path.dentry->d_inode,dentry,mode,0);
  			break;
  	}
@@ -42,7 +28,7 @@ index 9c590e0..f2c2295 100644
  out:
  	done_path_create(&path, dentry);
  	if (retry_estale(error, lookup_flags)) {
-@@ -3694,6 +3701,8 @@ retry:
+@@ -3759,6 +3763,8 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, umode_t, mode)
  	error = security_path_mkdir(&path, dentry, mode);
  	if (!error)
  		error = vfs_mkdir(path.dentry->d_inode, dentry, mode);
@@ -51,7 +37,7 @@ index 9c590e0..f2c2295 100644
  	done_path_create(&path, dentry);
  	if (retry_estale(error, lookup_flags)) {
  		lookup_flags |= LOOKUP_REVAL;
-@@ -3815,6 +3824,8 @@ retry:
+@@ -3855,6 +3861,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
  	if (error)
  		goto exit3;
  	error = vfs_rmdir(path.dentry->d_inode, dentry);
@@ -60,7 +46,7 @@ index 9c590e0..f2c2295 100644
  exit3:
  	dput(dentry);
  exit2:
-@@ -3939,6 +3950,8 @@ retry_deleg:
+@@ -3979,6 +3987,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
  		if (error)
  			goto exit2;
  		error = vfs_unlink(path.dentry->d_inode, dentry, &delegated_inode);
@@ -69,7 +55,7 @@ index 9c590e0..f2c2295 100644
  exit2:
  		dput(dentry);
  	}
-@@ -4030,6 +4043,8 @@ retry:
+@@ -4070,6 +4080,8 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
  	error = security_path_symlink(&path, dentry, from->name);
  	if (!error)
  		error = vfs_symlink(path.dentry->d_inode, dentry, from->name);
@@ -78,7 +64,7 @@ index 9c590e0..f2c2295 100644
  	done_path_create(&path, dentry);
  	if (retry_estale(error, lookup_flags)) {
  		lookup_flags |= LOOKUP_REVAL;
-@@ -4172,6 +4187,8 @@ retry:
+@@ -4219,6 +4231,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
  	if (error)
  		goto out_dput;
  	error = vfs_link(old_path.dentry, new_path.dentry->d_inode, new_dentry, &delegated_inode);
@@ -87,7 +73,7 @@ index 9c590e0..f2c2295 100644
  out_dput:
  	done_path_create(&new_path, new_dentry);
  	if (delegated_inode) {
-@@ -4494,6 +4511,10 @@ retry_deleg:
+@@ -4532,6 +4546,10 @@ SYSCALL_DEFINE5(renameat2, int, olddfd, const char __user *, oldname,
  	error = vfs_rename(old_path.dentry->d_inode, old_dentry,
  			   new_path.dentry->d_inode, new_dentry,
  			   &delegated_inode, flags);
@@ -99,10 +85,10 @@ index 9c590e0..f2c2295 100644
  	dput(new_dentry);
  exit4:
 diff --git a/fs/notify/fanotify/fanotify.c b/fs/notify/fanotify/fanotify.c
-index d2f97ec..c424f67 100644
+index bbc175d4213d..5178b06c338c 100644
 --- a/fs/notify/fanotify/fanotify.c
 +++ b/fs/notify/fanotify/fanotify.c
-@@ -197,6 +197,7 @@ static int fanotify_handle_event(struct fsnotify_group *group,
+@@ -186,6 +186,7 @@ static int fanotify_handle_event(struct fsnotify_group *group,
  
  	BUILD_BUG_ON(FAN_ACCESS != FS_ACCESS);
  	BUILD_BUG_ON(FAN_MODIFY != FS_MODIFY);
@@ -111,10 +97,10 @@ index d2f97ec..c424f67 100644
  	BUILD_BUG_ON(FAN_CLOSE_WRITE != FS_CLOSE_WRITE);
  	BUILD_BUG_ON(FAN_OPEN != FS_OPEN);
 diff --git a/include/linux/fsnotify.h b/include/linux/fsnotify.h
-index 7ee1774..57787b7 100644
+index b43d3f5bd9ea..a202e744a9ad 100644
 --- a/include/linux/fsnotify.h
 +++ b/include/linux/fsnotify.h
-@@ -225,6 +225,22 @@ static inline void fsnotify_modify(struct file *file)
+@@ -208,6 +208,22 @@ static inline void fsnotify_modify(struct file *file)
  }
  
  /*
@@ -138,7 +124,7 @@ index 7ee1774..57787b7 100644
   */
  static inline void fsnotify_open(struct file *file)
 diff --git a/include/linux/fsnotify_backend.h b/include/linux/fsnotify_backend.h
-index 533c440..d32ccff 100644
+index 487246546ebe..9e7c01680d8c 100644
 --- a/include/linux/fsnotify_backend.h
 +++ b/include/linux/fsnotify_backend.h
 @@ -42,6 +42,7 @@
@@ -150,7 +136,7 @@ index 533c440..d32ccff 100644
  #define FS_EXCL_UNLINK		0x04000000	/* do not send events if object is unlinked */
  #define FS_ISDIR		0x40000000	/* event occurred against dir */
 diff --git a/include/uapi/linux/fanotify.h b/include/uapi/linux/fanotify.h
-index 030508d..737b561 100644
+index 030508d195d3..f14e048d492a 100644
 --- a/include/uapi/linux/fanotify.h
 +++ b/include/uapi/linux/fanotify.h
 @@ -15,6 +15,8 @@
