@@ -1,0 +1,3 @@
+[submodule "butter"]
+	path = 3rd/butter
+	url = https://github.com/regnarg/butter
