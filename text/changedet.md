@@ -87,8 +87,8 @@ The inode serves as a logical identifier for the given filesystem object. It als
 most of its metadata: size, permissions, last modification time. However, **an inode does
 not store its own name.**
 
-The names are instead stored in the parent directory inode. The content of
-a directory inode can be tought of as a mapping from names to inodes of its direct
+The names are instead stored in the parent directory. The content of
+a directory can be tought of as a mapping from names to inodes of its direct
 children. The elements of this mapping are called *directory entries*.
 
 This implies that an inode can have multiple names if multiple directory entries
@@ -120,7 +120,7 @@ facts:
   * \pfact{To rename or delete a file, you do not need write
     permissions (or in fact, any permissions) to that file, only to the parent directory.}
     {These operations do not touch the file inode
-    at all, they change only the parent directory inode (by adding/removing directory
+    at all, they change only the parent directory contents (by adding/removing directory
     entries).}
 
   * \pfact{Renaming a file updates the last modification time
@@ -556,7 +556,7 @@ Inotify assigns a unique cookie called the \D{watch descriptor} to every inode o
 watch list. This watch descriptor is then returned with events concerning this inode.
 In case of directory-changing events (creations, renames and unlinks), a basename
 of the affected file is returned alongside the watch descriptor of the directory. We
-can simply keep a mapping from watch tables to IIDs or some other kind of internal
+can simply keep a mapping from watch descriptors to IIDs or some other kind of internal
 identifiers. This also gives us access to the file handle if a race-free access to
 the affected inode is necessary.
 

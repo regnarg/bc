@@ -1,13 +1,23 @@
-import sys, os, time
+import sys, os, time, stat
 import uuid
 import asyncio
 import binascii
+from weakref import ref as WeakRef
+
 from functools import *
 from collections import *
 from itertools import *
 from contextlib import *
 
 from butter.fhandle import *
+import logging
+
+def init_debug(cats):
+    enabled_cats = os.environ.get('FILOCO_DBG', '').split(',')
+    glob = sys._getframe(1).f_globals
+    for cat in cats:
+        glob['D_' + cat.upper()] = cat in enabled_cats
+init_debug(['dbw', 'fd'])
 
 def gen_uuid():
     """Generate a random 128-bit ID and return it as a hexadecimal string."""
@@ -55,6 +65,8 @@ def monotime():
 class SqliteWrapper(object):
     """A convenience wrapper around SQLite (apsw).
     """
+    log = logging.getLogger('filoco.debug')
+
     def __init__(self, fn, *, wal=False, timeout=30):
         import apsw
         self.connection = apsw.Connection(fn)
@@ -78,18 +90,22 @@ class SqliteWrapper(object):
         # have to replace it with some sane custom locking.
         self.connection.setbusytimeout(int(timeout*1000))
 
-    def _iter(self, cur):
+    def _iter(self, cur, assoc=True):
         col_names = None
         for row in cur:
             # Hack: getdescription doesn't work when the result is empty.
-            if col_names is None: col_names = [ desc[0] for desc in cur.getdescription() ]
-            yield AttrDict(zip(col_names, row))
+            if assoc:
+                if col_names is None: col_names = [ desc[0] for desc in cur.getdescription() ]
+                yield AttrDict(zip(col_names, row))
+            else:
+                yield row
         cur.close()
 
     def query(self, query, *args, **kw):
+        assoc = kw.pop('_assoc', True)
         cur = self.connection.cursor()
         cur.execute(query, kw or args)
-        return self._iter(cur)
+        return self._iter(cur, assoc=assoc)
 
     def query_first(self, query, *args, **kw):
         try:
@@ -98,6 +114,8 @@ class SqliteWrapper(object):
             return None
 
     def execute(self, query, *args, **kw):
+        if D_DBW and not query.lower().startswith('select '):
+            self.log.debug('%s %r', query, kw or args)
         cur = self.connection.cursor()
         cur.execute(query, kw or args)
         cur.close()
@@ -271,6 +289,58 @@ def async_wait_readable(fd):
     loop.add_reader(fd, cb)
     return fut
 
+def mode2type(mode):
+    if not isinstance(mode, int): mode = mode.st_mode
+    if stat.S_ISDIR(mode):
+        return 'd'
+    elif stat.S_ISREG(mode):
+        return 'r'
+    elif stat.S_ISLNK(mode):
+        return 'l'
+    else:
+        return 'S' # special file (socket, fifo, device)
+
+class FD:
+    """An object managing the lifetime of a file descriptor.
+
+    We use Python's reference counting to keep track of file descriptors.
+    When there are no references to the FD object, it automatically
+    closes the underlying FD."""
+    __slots__ = ('fd', '_name', '__weakref__') # name is only for debug
+    def __init__(self, fd, _name=None):
+        self.fd = fd
+        self._name = _name
+    @classmethod
+    def open(cls, *a, **kw):
+        if isinstance(kw.get('dir_fd'), FD): kw['dir_fd'] = kw['dir_fd'].fd
+        ret =  cls(os.open(*a, **kw), _name=a[0])
+        if D_FD: logging.debug('Opened %r' % ret)
+        return ret
+
+    def _close(self):
+        """Explicitly close the file descriptor (dangerous).
+        Do not call unless absolutely sure nobody else has a reference to the FD object."""
+        if self.fd is None: return
+        if D_FD: logging.debug('Closing %r' % self)
+        os.close(self.fd)
+        self.fd = None
+
+    def __del__(self):
+        if D_FD: logging.debug('Destructing %r' % self)
+        self._close()
+
+    def __int__(self):
+        return self.fd
+
+    def __pos__(self):
+        """Use unary + to convert to int (like in Perl 6)."""
+        return self.fd
+
+    def __repr__(self):
+        if self._name:
+            return 'FD(%d, %r)' % (self.fd, self._name)
+        else:
+            return 'FD(%d)' % self.fd
 
 try:
     # Live debugging on exception using IPython/ipdb
@@ -281,6 +351,7 @@ try:
         # stdio may be redirected in some workers, we want ipython to access the tty
         with stdio_to_tty():
             ultratb.FormattedTB(mode='Verbose', color_scheme='Linux', call_pdb=1)(t,v,tb)
+        sys.exit(1)
     sys.excepthook = excepthook
 except ImportError:
     pass

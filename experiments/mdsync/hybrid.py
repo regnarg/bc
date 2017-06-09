@@ -6,8 +6,12 @@ import asyncio
 
 import hashlib
 from math import *
+from time import time
 
 ##seed(42)
+
+debug = lambda *a: None
+verbose = lambda *a: None
 
 def md4(x): return int(hashlib.new('md4', x.encode('ascii')).hexdigest(), 16)
 
@@ -93,8 +97,8 @@ class HybridTree:
     def __contains__(self, key):
         return h1(key) in self.T1
 
-SIZE = 10**3
-CHANGES = 5000
+SIZE = 10**5
+CHANGES = 10000
 
 async def endpoint(H, rx, tx, archive):
     lvl_alive = [1]
@@ -102,7 +106,7 @@ async def endpoint(H, rx, tx, archive):
     to_send = []
     send_subtree = []
     while lvl_alive:
-        print("Level %d, alive %r" % (level, lvl_alive))
+        debug("Level %d, alive %r" % (level, lvl_alive))
         sent = { idx: (H.T1.data[idx], H.T2.data[idx]) for idx in lvl_alive }
         archive.append(sent)
         await tx.put(sent)
@@ -111,7 +115,7 @@ async def endpoint(H, rx, tx, archive):
         for vert in set(sent.keys()) | set(recv.keys()):
             my_val, my_chk = sent.get(vert, (0,0))
             their_val, their_chk = recv.get(vert, (0,0))
-            print("Vert %d: my %x/%x, their %x/%x" % (vert, my_val, my_chk, their_val, their_chk))
+            verbose("Vert %d: my %x/%x, their %x/%x" % (vert, my_val, my_chk, their_val, their_chk))
             if my_val == 0 and my_chk == 0: continue # subtree empty, nothing to send
             if their_val == 0 and their_chk == 0: # they have nothing, send whole subtree, no need to recurse
                 send_subtree.append(vert)
@@ -128,13 +132,13 @@ async def endpoint(H, rx, tx, archive):
 
             # all other cases: we have two different non-trivial subtrees, recurse on both ends
             assert level < LEVELS -1
-            print("...recursing")
+            verbose("...recursing")
             child_base = vert << BITS_PER_LEVEL
             next_lvl += [ idx for idx in range(child_base, child_base + ARITY) if idx in H.T1.data ]
         lvl_alive = next_lvl
         level += 1
     for vert in send_subtree:
-        print("send_subtree", vert)
+        verbose("send_subtree", vert)
         # BFS of the subtree
         from collections import deque
         q = deque([vert])
@@ -157,10 +161,12 @@ def reconcile(A, B):
     ba_archive = []
     ab = asyncio.Queue()
     ba = asyncio.Queue()
+    start = time()
     endp_a = endpoint(A, ba, ab, ab_archive)
     endp_b = endpoint(B, ab, ba, ba_archive)
     fut = asyncio.gather(endp_a, endp_b)
     ret_a, ret_b = asyncio.get_event_loop().run_until_complete(fut)
+    dur = time() - start
     assert len(ab_archive) == len(ba_archive)
     xfer = xfer_stat(ab_archive) + xfer_stat(ba_archive)
     print("Roundtrips:", len(ab_archive))
@@ -169,6 +175,7 @@ def reconcile(A, B):
     # This assumes no of the previous rounds succeed and the big enough one succeeds.
     print("IBF roundtrips: %d" % int(floor(log2(2*CHANGES))))
     print("IBF transfer: %.1f B per change" % ( (8+8+4) * int(floor(log2(2*CHANGES)))))
+    print("Reconcile took %.1f seconds, %.2f per change." % (dur, dur/(2*CHANGES)))
     #print(len(ret_a), ret_a)
     #print(len(ret_b), ret_b)d
     #CHECK CORRECTNESS
@@ -194,7 +201,6 @@ def test():
 
     print(orig.T1.data[1], new.T1.data[1])
 
-    print("Reconciling")
     reconcile(orig, new)
 
 

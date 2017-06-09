@@ -6,7 +6,9 @@ create table inodes (
     iid text unique,
     type text, -- 'r', 'd', 'l', etc.
     scan_state integer default 0,
-    mtime integer
+    size integer,
+    mtime integer,
+    ctime integer
 );
 
 -- including 'ino' in the index helps sorting
@@ -30,3 +32,17 @@ create table fslog (
 );
 
 ---- SYNCHRONIZED METADATA ----
+
+create table objects (
+    oid text unique
+    
+);
+
+create table versions (
+    vid text uinque,
+    oid text references objects(oid),
+    parents text
+
+);
+
+

@@ -47,13 +47,21 @@ class Store:
     meta_fd = None
     def __init__(self, root):
         if isinstance(root, int):
+            root = FD(root)
+        if isinstance(root, FD): # fall thru
             self.root_fd = root
             self.root_path = frealpath(self.root_fd)
         else:
             self.root_path = os.path.realpath(root)
-            self.root_fd = os.open(self.root_path, os.O_DIRECTORY)
+            self.root_fd = FD.open(self.root_path, os.O_DIRECTORY)
+        self.root_mnt = name_to_handle_at(self.root_fd, "", AT_EMPTY_PATH)[1]
         self.meta_path = os.path.join(self.root_path, META_DIR)
-        self.meta_fd = os.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
+        self.meta_fd = FD.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
+
+    @property
+    def db(self):
+        self.db = self.open_db()
+        return db
 
     @classmethod
     def find(cls, dir='.'):
@@ -87,12 +95,8 @@ class Store:
     def open_db(self):
         return SqliteWrapper('/proc/self/fd/%d/meta.sqlite' % self.meta_fd, wal=True)
 
-    def __del__(self):
-        if self.meta_fd: os.close(self.meta_fd)
-        if self.root_fd: os.close(self.root_fd)
-
     def open_handle(self, handle, flags):
-        return open_by_handle_at(self.root_fd, str_to_handle(handle), flags)
+        return FD(open_by_handle_at(self.root_fd, str_to_handle(handle), flags))
 
     def handle_exists(self, handle):
         try:
@@ -100,5 +104,9 @@ class Store:
         except StaleHandle:
             return False
         else:
-            os.close(fd)
+            fd._close()
             return True
+
+def stat_tuple(st):
+    # TODO: order?
+    return (st.st_mtime, st.st_ctime, st.st_size, st.st_ino)
