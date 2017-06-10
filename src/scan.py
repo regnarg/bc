@@ -115,7 +115,7 @@ ScanRequest = namedtuple('ScanRequest', 'prio action target')
 # action: one of
 SR_CHECK = 1 # do a stat and compare type/size/mtime/ctime, do rescan if necessary
 SR_SCAN = 2  # do a full rescan of contents (i.e., readdir)
-SE_SCAN_RECURSIVE = 3 # ...and recurse to all subdirs
+SR_SCAN_RECURSIVE = 3 # ...and recurse to all subdirs
 
 class Scanner:
     # TODO: Running two scanners in parallel in the same repo might wreak havoc.
@@ -193,7 +193,7 @@ class Scanner:
             if self.db.changes():
                 self.db.insert('fslog', event=EVENT_DELETE, iid=iid)
 
-    def find_inode(self, info, *, is_root=False):
+    def find_inode(self, info, *, is_root=False, create=True):
         handle = info.get_handle()
         ino = info.get_ino()
         ftype = info.get_type()
@@ -201,24 +201,28 @@ class Scanner:
             obj = self.db.query_first('select * from inodes where ino=?', ino)
             if obj is not None:
                 if obj.handle == handle or self.store.handle_exists(obj.handle):
+                    info.iid = obj['iid']
                     return obj
                 else:
                     if is_root or obj.iid == 'ROOT':
                         raise RuntimeError("Root replacement not supported")
                     self.do_delete_inode(obj.iid)
-            if is_root: iid = 'ROOT'
-            else: iid = gen_uuid()
-            st = info.get_stat()
-            # We can insert safely without any locking. Because we hold an open FD to
-            # the inode, it cannot just disappear and thus we are writing correct data.
-            self.db.insert('inodes', ino=ino, handle=handle, iid=iid, type=ftype,
-                            size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime)
-            self.db.insert('fslog', event=EVENT_CREATE, iid=iid)
-            if ftype == 'd':
-                self.push_scan(SR_SCAN, info)
-            ret = self.db.query_first('select * from inodes where ino=?', ino)
-            info.iid = ret['iid']
-            return ret
+            elif create:
+                if is_root: iid = 'ROOT'
+                else: iid = gen_uuid()
+                st = info.get_stat()
+                # We can insert safely without any locking. Because we hold an open FD to
+                # the inode, it cannot just disappear and thus we are writing correct data.
+                self.db.insert('inodes', ino=ino, handle=handle, iid=iid, type=ftype,
+                                size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime)
+                self.db.insert('fslog', event=EVENT_CREATE, iid=iid)
+                if ftype == 'd':
+                    self.push_scan(SR_SCAN, info)
+                ret = self.db.query_first('select * from inodes where ino=?', ino)
+                info.iid = ret['iid']
+                return ret
+            else:
+                return None
 
     def push_scan(self, action, target):
         if self.queue_fds >= self.QUEUE_MAX_FDS:
@@ -251,12 +255,12 @@ class Scanner:
             # in cache.
             self.scan(info, fresh_stat=True)
 
-    def scan(self, info, *, fresh_stat=False):
+    def scan(self, info, *, fresh_stat=False, recursive=False):
         info.get_stat(force=not fresh_stat)
         if info.type == 'd':
-            self.scan_dir(info, fresh_stat=True)
+            self.scan_dir(info, fresh_stat=True, recursive=recursive)
 
-    def scan_dir(self, dirinfo, *, fresh_stat=False):
+    def scan_dir(self, dirinfo, *, fresh_stat=False, recursive=False):
         if D_SCAN: log.debug("Scanning %r", dirinfo)
         seen  = set()
         st_start = dirinfo.get_stat(force=not fresh_stat)
@@ -298,6 +302,8 @@ class Scanner:
                                     name=entry.name)
                         self.db.insert('fslog', event=EVENT_LINK, iid=obj.iid, parent_iid=dirobj.iid,
                                                 name=entry.name)
+                if recursive and stat.S_ISDIR(info.stat.st_mode):
+                    self.push_scan(SR_SCAN_RECURSIVE, info)
             to_del = []
             for obj in self.db.query('select rowid, name from links where parent=?', dirobj.ino):
                 if obj.name not in seen:
@@ -318,11 +324,10 @@ class Scanner:
         log.debug('Deleting inode %r from database', info)
         self.db.execute('delete from inodes where iid=?', info.iid)
 
-    def check_root(self):
-        if self.db.query_first("select * from inodes where iid = 'ROOT'") is None:
-            log.debug("No root record, triggering scan")
-            info = InodeInfo(self.store, fd=self.store.root_fd)
-            self.find_inode(info, is_root=True)
+    def get_root(self):
+        info = InodeInfo(self.store, fd=self.store.root_fd)
+        self.find_inode(info, is_root=True)
+        return info
 
 
     def queue_unscanned(self, action=SR_SCAN):
@@ -341,6 +346,8 @@ class Scanner:
             self.check(sr.target)
         elif sr.action == SR_SCAN:
             self.scan(sr.target)
+        elif sr.action == SR_SCAN_RECURSIVE:
+            self.scan(sr.target, recursive=True)
         else:
             raise NotImplementedError
 
@@ -368,10 +375,14 @@ class Scanner:
         log.debug("init")
         if self.watch_mode == 'fanotify':
             self.init_fanotify()
-        self.check_root()
+        # Ensure there is a root record in DB, otherwise recheck would do nothing
+        self.get_root()
         if self.init_scan == 'all':
             #self.db.update('inodes', "type='d' and scan_state=?", SCAN_UP_TO_DATE, scan_state=SCAN_WANT_RESCAN)
-            self.scan_by_query('1', action=SR_CHECK)
+            if self.recursive:
+                self.push_scan(SR_SCAN_RECURSIVE, self.get_root())
+            else:
+                self.scan_by_query('1', action=SR_CHECK)
         if self.watch_mode == 'fanotify':
             self.loop.create_task(self.fanotify_worker())
 

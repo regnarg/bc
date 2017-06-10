@@ -42,6 +42,11 @@ class StoreNotFound(FileNotFoundError):
         if isinstance(path, int): path = frealpath(path)
         super().__init__("'%s' is not (in) a Filoco repository." % path)
 
+class Object:
+    def __init__(self, store, oid=None):
+        if oid is None: oid = gen_uuid()
+        self.oid = oid
+
 class Store:
     root_fd = None
     meta_fd = None
@@ -58,10 +63,11 @@ class Store:
         self.meta_path = os.path.join(self.root_path, META_DIR)
         self.meta_fd = FD.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
 
+    _db = None
     @property
     def db(self):
-        self.db = self.open_db()
-        return db
+        if self._db is None: self._db = self.open_db()
+        return self._db
 
     @classmethod
     def find(cls, dir='.'):
