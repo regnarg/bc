@@ -8,7 +8,8 @@ create table inodes (
     scan_state integer default 0,
     size integer,
     mtime integer,
-    ctime integer
+    ctime integer,
+    oid integer references obects(oid)
 );
 
 -- including 'ino' in the index helps sorting
@@ -39,22 +40,20 @@ create table syncables (
 );
 
 create table synctree (
-    pos text unique,
-    xor text,
-    chk text
+    pos integer primary key,
+    xor blob,
+    chxor blob
 );
 
 create table objects (
     oid text unique references syncable(id),
     type text
-    
 );
 
 create table versions (
     vid text unique references syncable(id),
     oid text references objects(oid),
     parent_versions text
-
 );
 
 

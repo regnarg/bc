@@ -11,6 +11,9 @@ from contextlib import *
 
 from butter.fhandle import *
 import logging
+from pathlib import Path
+
+FILOCO_LIBDIR = Path(__file__).parent
 
 def init_debug(cats):
     enabled_cats = os.environ.get('FILOCO_DBG', '').split(',')
@@ -61,6 +64,11 @@ def monotime():
     CLOCK_MONOTONIC_COARSE = 6 # Python is missing this constant
     return time.clock_gettime(CLOCK_MONOTONIC_COARSE)
 
+
+import contextlib
+@contextlib.contextmanager
+def null_contextmanager():
+    yield
 
 class SqliteWrapper(object):
     """A convenience wrapper around SQLite (apsw).
@@ -165,6 +173,11 @@ class SqliteWrapper(object):
 
     def __exit__(self, tp, val, tb):
         return self.connection.__exit__(tp, val, tb)
+
+    def ensure_transaction(self):
+        """Wrap in a transaction if one is not already active but do not create a nested transaction"""
+        if self.connection.getautocommit(): return self
+        else: return null_contextmanager()
 
 def fdscandir(fd):
     """Read the contents of a directory identified by file descriptor `fd`."""

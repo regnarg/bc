@@ -31,7 +31,7 @@ EVENT_UNLINK = 3
 EVENT_DELETE = 4 # the inode is really gone
 EVENT_MODIFY = 5 # a file's content was modified
 
-init_debug(('queue','scan'))
+init_debug(('queue','scan','mdupdate'))
 
 class InodeInfo:
     __slots__ = ('store', '_fd', 'handle', 'stat', 'ino', 'iid', 'ino', 'type')
@@ -188,7 +188,7 @@ class Scanner:
         """Delete a given inode from database. Use when sure the original inode no longer exists.
         
         (e.g. when its handle cannot be opened)"""
-        with self.db:
+        with self.db.ensure_transaction():
             self.db.execute('delete from inodes where iid=?', iid)
             if self.db.changes():
                 self.db.insert('fslog', event=EVENT_DELETE, iid=iid)
@@ -197,7 +197,7 @@ class Scanner:
         handle = info.get_handle()
         ino = info.get_ino()
         ftype = info.get_type()
-        with self.db:
+        with self.db.ensure_transaction():
             obj = self.db.query_first('select * from inodes where ino=?', ino)
             if obj is not None:
                 if obj.handle == handle or self.store.handle_exists(obj.handle):
@@ -268,7 +268,7 @@ class Scanner:
         except CrossMount: return
         assert dirobj.type == 'd'
         assert dirinfo.iid
-        with self.db:
+        with self.db.ensure_transaction():
             for entry in fdscandir(dirinfo.get_fd()):
                 try:
                     entry.name.encode('utf-8')
@@ -296,10 +296,12 @@ class Scanner:
                         self.db.update('links', 'parent=? and name=?',
                                 dirobj.ino, entry.name, ino=obj.ino)
                     else:
-                        log.debug("Linking %s into %s", frealpath(fd),
+                        if D_MDUPDATE:
+                            log.debug("Linking %s into %s", frealpath(fd),
                                 frealpath(dirinfo.fd))
                         self.db.insert('links', ino=obj.ino, parent=dirobj.ino,
                                     name=entry.name)
+                        self.on_link(dirinfo, dirobj, entry.name, info, obj, old_obj)
                         self.db.insert('fslog', event=EVENT_LINK, iid=obj.iid, parent_iid=dirobj.iid,
                                                 name=entry.name)
                 if recursive and stat.S_ISDIR(info.stat.st_mode):
@@ -319,6 +321,12 @@ class Scanner:
             else:
                 self.db.update('inodes','ino=?', dirobj.ino, scan_state=SCAN_NEEDS_RESCAN)
                 # TODO schedule delayed rescan (exp. backoff ideally)
+
+    def on_link(self, parent_info, parent_obj, name, info, obj, old_obj=None):
+        if not obj.oid and info.type in ('d', 'r'):
+            with self.db.ensure_transaction():
+                oid = self.store.create_object(type=info.type, name=name, parent=parent_obj.oid)
+                self.db.update('inodes', 'iid=?', obj.iid, oid=oid)
 
     def delete_inode(self, info):
         log.debug('Deleting inode %r from database', info)

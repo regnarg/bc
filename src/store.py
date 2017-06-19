@@ -47,25 +47,27 @@ class Object:
         if oid is None: oid = gen_uuid()
         self.oid = oid
 
-import hashlib
+import hashlib, codecs
 class SyncTree:
     #TODO: Split logic and database handling
-    LEAF = 1 << 128
-    POS_SALT = 'filoco-pos-'
-    CHK_SALT = 'filoco-chk-'
+    POS_BITS = 48
+    ID_BITS = 128
+    LEAF = 1 << (POS_BITS-1)
+    POS_SALT = b'filoco-pos-'
+    CHK_SALT = b'filoco-chk-'
     def __init__(self, db):
         self.db = db
 
     def add(self, id, kind):
-        with self.db:
+        with self.db.ensure_transaction():
             self.db.insert('syncables', _on_conflict='ignore', id=id, kind=kind)
             if self.db.changes():
                 self._update_synctree(id)
 
     def hash_pos(self, id):
-        return int(hashlib.md5((self.POS_SALT + id).encode('ascii')).hexdigest(), 16) | self.LEAF
+        return int(hashlib.md5(self.POS_SALT + id).hexdigest()[:self.POS_BITS//8], 16) | self.LEAF
     def hash_chk(self, id):
-        return hashlib.md5((self.CHK_SALT + id).encode('ascii')).hexdigest()
+        return hashlib.md5(self.CHK_SALT + id).digest()
 
     def _update_synctree(self, id):
         """Update synctree after adding or removing a syncable with given id.
@@ -73,27 +75,15 @@ class SyncTree:
 
         Call from within a transaction!"""
         
-        cur = self.hash_pos(id)
-        num_id = int(id, 16)
-        num_chk = int(self.hash_chk(id), 16)
-        while cur:
-            hexpos = '%x' % cur
-            row = self.db.query_first('select xor, chk from synctree where pos=?', hexpos, _assoc=False)
-            if row:
-                xor, chk = (int(x, 16) for x in row)
-                assert xor != 0 and chk != 0
-            else:
-                xor, chk = 0, 0
-            xor ^= num_id
-            chk ^= num_chk
-            delete = (xor == 0)
-            assert delete == (chk == 0)
-            if delete:
-                self.db.execute('delete from synctree where pos=?', hexpos)
-            else:
-                #self.db.update('synctree', 'pos=?', hexpos, xor='%x'%xor, chk='%x'%chk)
-                self.db.insert('synctree', _on_conflict='replace',pos=hexpos, xor='%x'%xor, chk='%x'%chk)
-            cur = cur >> 1
+        bin_id = codecs.decode(id, 'hex')
+        pos = self.hash_pos(bin_id)
+        chk = self.hash_chk(bin_id)
+        while pos:
+            self.db.execute('insert or ignore into synctree values (?,?,?)', pos, bin_id, chk)
+            if not self.db.changes():
+                self.db.execute('update synctree set xor=binxor(xor,?), chxor=binxor(chxor,?) where pos=?', bin_id, chk, pos)
+                self.db.execute('delete from synctree where pos=? and xor=zeroblob(%d)'%(self.ID_BITS//8), pos)
+            pos >>= 1
 
 
 def lazy(init_func):
@@ -166,6 +156,8 @@ class Store:
 
     def open_db(self):
         self.db = SqliteWrapper('/proc/self/fd/%d/meta.sqlite' % self.meta_fd, wal=True)
+        self.db.connection.enableloadextension(True)
+        self.db.connection.loadextension(str(FILOCO_LIBDIR / 'binxor.so'))
 
     def open_handle(self, handle, flags):
         return FD(open_by_handle_at(self.root_fd, str_to_handle(handle), flags))
@@ -181,6 +173,9 @@ class Store:
 
     def create_object(self, *, type, name=None, parent=None):
         oid = gen_uuid()
+        with self.db.ensure_transaction():
+            self.db.insert('objects', oid=oid, type=type)
+            self.synctree.add(oid, 'object')
 
 
 def stat_tuple(st):
