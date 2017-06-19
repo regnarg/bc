@@ -7,7 +7,6 @@ SQLite database.
 
 
 import sys, os
-import apsw # an alternative sqlite wrapper
 from utils import *
 from butter.fhandle import *
 
@@ -42,10 +41,74 @@ class StoreNotFound(FileNotFoundError):
         if isinstance(path, int): path = frealpath(path)
         super().__init__("'%s' is not (in) a Filoco repository." % path)
 
+
 class Object:
     def __init__(self, store, oid=None):
         if oid is None: oid = gen_uuid()
         self.oid = oid
+
+import hashlib
+class SyncTree:
+    #TODO: Split logic and database handling
+    LEAF = 1 << 128
+    POS_SALT = 'filoco-pos-'
+    CHK_SALT = 'filoco-chk-'
+    def __init__(self, db):
+        self.db = db
+
+    def add(self, id, kind):
+        with self.db:
+            self.db.insert('syncables', _on_conflict='ignore', id=id, kind=kind)
+            if self.db.changes():
+                self._update_synctree(id)
+
+    def hash_pos(self, id):
+        return int(hashlib.md5((self.POS_SALT + id).encode('ascii')).hexdigest(), 16) | self.LEAF
+    def hash_chk(self, id):
+        return hashlib.md5((self.CHK_SALT + id).encode('ascii')).hexdigest()
+
+    def _update_synctree(self, id):
+        """Update synctree after adding or removing a syncable with given id.
+        (as we are xorring, the update is the same for adding and removing)
+
+        Call from within a transaction!"""
+        
+        cur = self.hash_pos(id)
+        num_id = int(id, 16)
+        num_chk = int(self.hash_chk(id), 16)
+        while cur:
+            hexpos = '%x' % cur
+            row = self.db.query_first('select xor, chk from synctree where pos=?', hexpos, _assoc=False)
+            if row:
+                xor, chk = (int(x, 16) for x in row)
+                assert xor != 0 and chk != 0
+            else:
+                xor, chk = 0, 0
+            xor ^= num_id
+            chk ^= num_chk
+            delete = (xor == 0)
+            assert delete == (chk == 0)
+            if delete:
+                self.db.execute('delete from synctree where pos=?', hexpos)
+            else:
+                #self.db.update('synctree', 'pos=?', hexpos, xor='%x'%xor, chk='%x'%chk)
+                self.db.insert('synctree', _on_conflict='replace',pos=hexpos, xor='%x'%xor, chk='%x'%chk)
+            cur = cur >> 1
+
+
+def lazy(init_func):
+    from functools import wraps
+    attr = '_' + init_func.__name__
+    @propery
+    @wraps(init_func)
+    def prop(self):
+        if hasattr(self, attr):
+            return getattr(self, attr)
+        else:
+            val = init_func(self)
+            setattr(self, attr, val)
+            return val
+    
 
 class Store:
     root_fd = None
@@ -62,12 +125,12 @@ class Store:
         self.root_mnt = name_to_handle_at(self.root_fd, "", AT_EMPTY_PATH)[1]
         self.meta_path = os.path.join(self.root_path, META_DIR)
         self.meta_fd = FD.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
+        self.open_db()
+        self.synctree = SyncTree(self.db)
 
-    _db = None
-    @property
-    def db(self):
-        if self._db is None: self._db = self.open_db()
-        return self._db
+    #@lazy
+    #def db(self):
+    #    return self.open_db()
 
     @classmethod
     def find(cls, dir='.'):
@@ -97,9 +160,12 @@ class Store:
         finally:
             if dfd is not None: os.close(dfd)
 
+    def add_syncable(self, id, kind):
+        self.db.insert('syncables', id=id, kind=kind)
+        self.synctree.add(id)
 
     def open_db(self):
-        return SqliteWrapper('/proc/self/fd/%d/meta.sqlite' % self.meta_fd, wal=True)
+        self.db = SqliteWrapper('/proc/self/fd/%d/meta.sqlite' % self.meta_fd, wal=True)
 
     def open_handle(self, handle, flags):
         return FD(open_by_handle_at(self.root_fd, str_to_handle(handle), flags))
@@ -112,6 +178,10 @@ class Store:
         else:
             fd._close()
             return True
+
+    def create_object(self, *, type, name=None, parent=None):
+        oid = gen_uuid()
+
 
 def stat_tuple(st):
     # TODO: order?

@@ -33,15 +33,27 @@ create table fslog (
 
 ---- SYNCHRONIZED METADATA ----
 
+create table syncables (
+    id text unique,
+    kind text
+);
+
+create table synctree (
+    pos text unique,
+    xor text,
+    chk text
+);
+
 create table objects (
-    oid text unique
+    oid text unique references syncable(id),
+    type text
     
 );
 
 create table versions (
-    vid text uinque,
+    vid text unique references syncable(id),
     oid text references objects(oid),
-    parents text
+    parent_versions text
 
 );
 

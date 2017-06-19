@@ -129,7 +129,7 @@ class Scanner:
         #    err("Watched directory '%s' must be a mountpoint."
         #            " The -m option might help with that." % args.dir)
         self.store = Store.find(dir or '.')
-        self.db = self.store.open_db()
+        self.db = self.store.db
         self.root_fd = self.store.root_fd
         self.scan_queue = asyncio.PriorityQueue(self.SCAN_QUEUE_SIZE)
         self.queue_fds = 0
