@@ -13,14 +13,14 @@ from butter.fhandle import *
 import logging
 from pathlib import Path
 
-FILOCO_LIBDIR = Path(__file__).parent
+FILOCO_LIBDIR = Path(__file__).parent.resolve()
 
 def init_debug(cats):
     enabled_cats = os.environ.get('FILOCO_DBG', '').split(',')
     glob = sys._getframe(1).f_globals
     for cat in cats:
         glob['D_' + cat.upper()] = cat in enabled_cats
-init_debug(['dbw', 'fd'])
+init_debug(['dbw', 'fd', 'pdb'])
 
 def gen_uuid():
     """Generate a random 128-bit ID and return it as a hexadecimal string."""
@@ -355,6 +355,10 @@ class FD:
         else:
             return 'FD(%d)' % self.fd
 
+import codecs
+def binhex(b):
+    return codecs.encode(b, 'hex').decode('ascii')
+
 try:
     # Live debugging on exception using IPython/ipdb
     from IPython.core import ultratb
@@ -363,8 +367,24 @@ try:
         if not issubclass(t, Exception): return sys.__excepthook__(t,v,tb)
         # stdio may be redirected in some workers, we want ipython to access the tty
         with stdio_to_tty():
-            ultratb.FormattedTB(mode='Verbose', color_scheme='Linux', call_pdb=1)(t,v,tb)
+            ultratb.FormattedTB(mode='Verbose', color_scheme='Linux', call_pdb=D_PDB)(t,v,tb)
         sys.exit(1)
     sys.excepthook = excepthook
 except ImportError:
     pass
+
+
+# Based on https://gist.github.com/nathan-hoad/8966377
+async def aio_read_pipe(file):
+    loop = asyncio.get_event_loop()
+    reader = asyncio.StreamReader()
+    reader_protocol = asyncio.StreamReaderProtocol(reader)
+    await loop.connect_read_pipe(lambda: reader_protocol, file)
+    return reader
+
+async def aio_write_pipe(file):
+    from asyncio.streams import StreamWriter, FlowControlMixin
+    loop = asyncio.get_event_loop()
+    writer_transport, writer_protocol = await loop.connect_write_pipe(FlowControlMixin, file)
+    writer = StreamWriter(writer_transport, writer_protocol, None, loop)
+    return writer

@@ -64,6 +64,9 @@ class SyncTree:
             if self.db.changes():
                 self._update_synctree(id)
 
+    def has(self, id):
+        return bool(self.db.query_first('select 1 from syncables where id=?', id))
+
     def hash_pos(self, id):
         return int(hashlib.md5(self.POS_SALT + id).hexdigest()[:self.POS_BITS//8], 16) | self.LEAF
     def hash_chk(self, id):
