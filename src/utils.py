@@ -359,6 +359,9 @@ import codecs
 def binhex(b):
     return codecs.encode(b, 'hex').decode('ascii')
 
+def binxor(a,b):
+    return bytes( x^y for x,y in zip(a,b) )
+
 try:
     # Live debugging on exception using IPython/ipdb
     from IPython.core import ultratb

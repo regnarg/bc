@@ -128,13 +128,19 @@ class MDSync(Protocol):
     def send_level(self, level):
         """Transfer all the active vertices from one level of the synctree.
         'level' should be a dictionary in the form {pos: (id_xor, chk_xor)}"""
+        if D_SYNCTREE: log.debug('Sending: %r', level)
         self.out_stream.write(struct.pack(self.SIZE_FMT, len(level)*self.NODE_BYTES))
         for pos, (id_xor, chk_xor) in level.items():
             self.out_stream.write(struct.pack(self.NODE_FMT, pos, id_xor, chk_xor))
 
     async def recv_level(self):
+        if self.recv_tree_eof: return {}
         ret = {}
         data = await self.read_sized()
+        if data == b'':
+            if D_SYNCTREE: log.debug('Received EOF')
+            self.recv_tree_eof = True
+            return {}
         for pos in range(0, len(data), self.NODE_BYTES):
             chunk = data[pos:pos + self.NODE_BYTES]
             pos, id_xor, chk_xor = struct.unpack(self.NODE_FMT, chunk)
@@ -143,21 +149,28 @@ class MDSync(Protocol):
 
 
     async def do_synctree(self): 
+        self.recv_tree_eof = False
         lvl_num = self.START_LVL
         start_off = start_size = 1 << self.START_LVL
         lvl_alive = list(range(start_off, start_off + start_size))
-        while lvl_alive:
+        to_send = []
+        send_subtree = []
+        while  lvl_num < SyncTree.POS_BITS:
             if D_SYNCTREE: log.debug("Level %d, alive %r", lvl_num, lvl_alive)
             sent = self.get_xors(lvl_alive)
-            (recv,) = await self.exchange([('level', sent)], ['level'])
+            if not self.recv_tree_eof:
+                (recv,) = await self.exchange([('level', sent)], ['level'])
+            if not sent:
+                if D_SYNCTREE: log.debug("Sent EOF, exiting")
+                break
             next_lvl = []
             for vert in sent:
                 my_val, my_chk = sent[vert]
-                their_val, their_chk = recv.get(vert, (0,0))
+                their_val, their_chk = recv.get(vert, (SyncTree.ZERO,SyncTree.ZERO))
                 if D_SYNCTREE: log.debug("Vert %d: my %s/%s, their %s/%s", vert,
                                     binhex(my_val), binhex(my_chk), binhex(their_val), binhex(their_chk))
 
-                if their_val == 0 and their_chk == 0: # they have nothing, send whole subtree, no need to recurse
+                if their_val == SyncTree.ZERO and their_chk == SyncTree.ZERO: # they have nothing, send whole subtree, no need to recurse
                     send_subtree.append(vert)
                     continue
 
@@ -165,16 +178,18 @@ class MDSync(Protocol):
                     continue # no changes
 
                 diff = binxor(my_val, their_val)
-                if h2(diff) == binxor(my_chk, their_chk): # only single chnage in subtree
+                if SyncTree.hash_chk(diff) == binxor(my_chk, their_chk): # only single chnage in subtree
                     if self.store.synctree.has(diff):
                         to_send.append(diff)
                     continue
 
                 # all other cases: we have two different non-trivial subtrees, recurse on both ends
-                assert level < LEVELS -1
-                verbose("...recursing")
-                child_base = vert << BITS_PER_LEVEL
-                next_lvl += range(child_base, child_base + ARITY)
+                assert lvl_num < SyncTree.POS_BITS - 1
+                if D_SYNCTREE: log.debug("...recursing")
+                child_base = vert << SyncTree.BITS_PER_LEVEL
+                next_lvl += range(child_base, child_base + SyncTree.ARITY)
+            if self.recv_tree_eof:
+                break
             lvl_alive = next_lvl
             lvl_num += 1
 

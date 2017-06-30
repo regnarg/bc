@@ -52,9 +52,13 @@ class SyncTree:
     #TODO: Split logic and database handling
     POS_BITS = 48
     ID_BITS = 128
+    ID_BYTES = ID_BITS//8
+    ZERO = b'\0' * ID_BYTES
     LEAF = 1 << (POS_BITS-1)
     POS_SALT = b'filoco-pos-'
     CHK_SALT = b'filoco-chk-'
+    BITS_PER_LEVEL = 1
+    ARITY = 1 << BITS_PER_LEVEL
     def __init__(self, db):
         self.db = db
 
@@ -67,10 +71,12 @@ class SyncTree:
     def has(self, id):
         return bool(self.db.query_first('select 1 from syncables where id=?', id))
 
-    def hash_pos(self, id):
-        return int(hashlib.md5(self.POS_SALT + id).hexdigest()[:self.POS_BITS//8], 16) | self.LEAF
-    def hash_chk(self, id):
-        return hashlib.md5(self.CHK_SALT + id).digest()
+    @classmethod
+    def hash_pos(cls, id):
+        return int(hashlib.md5(cls.POS_SALT + id).hexdigest()[:cls.POS_BITS//8], 16) | cls.LEAF
+    @classmethod
+    def hash_chk(cls, id):
+        return hashlib.md5(cls.CHK_SALT + id).digest()
 
     def _update_synctree(self, id):
         """Update synctree after adding or removing a syncable with given id.
@@ -86,7 +92,7 @@ class SyncTree:
             if not self.db.changes():
                 self.db.execute('update synctree set xor=binxor(xor,?), chxor=binxor(chxor,?) where pos=?', bin_id, chk, pos)
                 self.db.execute('delete from synctree where pos=? and xor=zeroblob(%d)'%(self.ID_BITS//8), pos)
-            pos >>= 1
+            pos >>= self.BITS_PER_LEVEL
 
 
 def lazy(init_func):
