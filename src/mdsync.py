@@ -72,11 +72,11 @@ class Protocol:
     async def recv_hello(self):
         pass
 
-    async def exchange(self, to_send, to_recv):
+    async def exchange(self, send_objects, to_recv):
         if not self.did_hello:
-            to_send = ['hello'] + to_send
+            send_objects = ['hello'] + send_objects
             to_recv = ['hello'] + to_recv
-        send_task = asyncio.ensure_future(self.send_multi(to_send))
+        send_task = asyncio.ensure_future(self.send_multi(send_objects))
         recv_task = asyncio.ensure_future(self.recv_multi(to_recv))
         done, pending = await asyncio.wait([send_task, recv_task],
                                 timeout=self.xchg_timeout,
@@ -153,9 +153,9 @@ class MDSync(Protocol):
         lvl_num = self.START_LVL
         start_off = start_size = 1 << self.START_LVL
         lvl_alive = list(range(start_off, start_off + start_size))
-        to_send = []
-        send_subtree = []
-        while  lvl_num < SyncTree.POS_BITS:
+        send_objects = []
+        send_subtrees = []
+        while  lvl_num < SyncTree.LEVELS:
             if D_SYNCTREE: log.debug("Level %d, alive %r", lvl_num, lvl_alive)
             sent = self.get_xors(lvl_alive)
             if not self.recv_tree_eof:
@@ -171,7 +171,7 @@ class MDSync(Protocol):
                                     binhex(my_val), binhex(my_chk), binhex(their_val), binhex(their_chk))
 
                 if their_val == SyncTree.ZERO and their_chk == SyncTree.ZERO: # they have nothing, send whole subtree, no need to recurse
-                    send_subtree.append(vert)
+                    send_subtrees.append(vert)
                     continue
 
                 if my_val == their_val and my_chk == their_chk:
@@ -180,18 +180,25 @@ class MDSync(Protocol):
                 diff = binxor(my_val, their_val)
                 if SyncTree.hash_chk(diff) == binxor(my_chk, their_chk): # only single chnage in subtree
                     if self.store.synctree.has(diff):
-                        to_send.append(diff)
+                        send_objects.append(diff)
                     continue
 
                 # all other cases: we have two different non-trivial subtrees, recurse on both ends
-                assert lvl_num < SyncTree.POS_BITS - 1
-                if D_SYNCTREE: log.debug("...recursing")
-                child_base = vert << SyncTree.BITS_PER_LEVEL
-                next_lvl += range(child_base, child_base + SyncTree.ARITY)
+                if lvl_num == SyncTree.LEVELS - 1:
+                    if D_SYNCTREE: log.debug("...leaf collision")
+                    # More changes in one leaf, need to use some additional info to reconstruct individual IDs
+                    raise NotImplementedError
+                else:
+                    if D_SYNCTREE: log.debug("...recursing")
+                    child_base = vert << SyncTree.BITS_PER_LEVEL
+                    next_lvl += range(child_base, child_base + SyncTree.ARITY)
             if self.recv_tree_eof:
                 break
             lvl_alive = next_lvl
             lvl_num += 1
+        if D_SYNCTREE:
+            logging.debug('Send subtrees: %r', send_subtrees)
+            logging.debug('Send objects: %r', send_objects)
 
     async def run(self):
         await self.prepare()

@@ -59,6 +59,7 @@ class SyncTree:
     CHK_SALT = b'filoco-chk-'
     BITS_PER_LEVEL = 1
     ARITY = 1 << BITS_PER_LEVEL
+    LEVELS = POS_BITS // BITS_PER_LEVEL
     def __init__(self, db):
         self.db = db
 
