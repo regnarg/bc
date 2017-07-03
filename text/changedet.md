@@ -287,7 +287,7 @@ non-reusable and independent of their names.
 The first natural candidate for an inode identifier is of course the inode
 number. But inode numbers can be reused when an inode is deleted and a new one
 is later created. This happens farily often, for example this simple experiment
-quite reliably reproduces inode number reuse on an otherwise quier ext4
+quite reliably reproduces inode number reuse on an otherwise quiet ext4
 filesystem:
 
     $ echo "first file" >first
