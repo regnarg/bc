@@ -427,7 +427,9 @@ could not do much better than this.
 This problem is aggravated by the structure of the ext4 filesystem. In ext4,
 the disk is split into equally-sized regions called \D{block groups}. Each
 block group contains both inode metadata and data blocks for a set of files.
-\TODO{block groups ref: https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/tree/Documentation/filesystems/ext2.txt?id=c290ea01abb7907fde602f3ba55905ef10a37477#n85}
+\TODO{block groups ref:
+%https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/tree/Documentation/filesystems/ext2.txt?id=c290ea01abb7907fde602f3ba55905ef10a37477\#n85
+}
 
 ![ext4 block group layout (not to scale)\label{bg}](img/blockgroup.pdf){#fig:bg}
 
@@ -622,7 +624,7 @@ to perhaps 5 minutes.
 
 Another consideration is that the inotify watch list and the watched inodes (which cannot
 be dropped from the inode cache because they are referenced by the watch list) consume
-non-swappable kernel memory. This would not be a problem for most user as the amount
+non-swappable kernel memory. This would not be a problem for most users as the amount
 is approximately 0.5$\,$kB per directory. It would be a problem for extremely large directory
 trees (hundreds of thousands of directories and more) but in such cases the scan times
 would probably be the more serious issue.

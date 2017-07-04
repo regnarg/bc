@@ -2,6 +2,49 @@
 
 ## Metadata Model
 
+\TODO{Move this to a more general intro section?}\
+First some terminology. Filoco synchronizes data among a set of *stores*. A store
+is a directory that holds the synchronized files, along with some Filoco-specific
+metadata. The whole group of stores that are synchronized with each other is called
+a *world*.
+
+Filoco follows the philosphy of ``centralized metadata, decentralized data''
+espoused by git-annex:\TODO{link} each store contains metadata about every
+file in the world but only stores the content of some files. Each store can
+configure which files it wants to have copies of.
+
+Decentralization of data allows you to choose a compromise between storage
+requirements, redundancy, and availability. You can configure some small,
+important or often-used files (emails, writings, notes, own source code) to be
+always replicated everywhere and bigger and less important files (movies you
+will probably never watch again) to have only one copy distributed among
+several slow external hard drives in your closet. And there is of course the
+middle ground of keeping some files on say 3 out of 10 available stores for
+some redundancy.
+
+Currently, you need to manually configure which stores store which files
+(using filters based on file path, type or size, as \TODO{described later}).
+
+On the other hand, centralization of metadata allows you to always keep track
+of all your files, no matter where they are stored, even if it is an external
+hard drive in your safe deposit box. The synchronized metadata contain
+a complete directory tree (i.e. file/directory names and parent-child
+relationships) of all the files in the world, which is shared among all the
+stores.
+
+This means that is is not possible to have a file stored under
+a different name in one store that in another. If a file or directory is
+moved or renamed on one store, this change is replicated to all stores, even
+those not hosting the file's content. The rename can even be initiated from
+such a store. You can completely reorganize your directory hierarchy from
+the comfort of your laptop, even though some of the files are physically
+located only on offline external drives. The next time you connect such drive
+and perform synchronization, these renames will be applied there.
+
+Apart from the directory tree and some basic metadata like file sizes, the
+centralized metadata contains two important pieces of information:
+
+
 ### Local Filesystem Metadata
 
 ### Synchronized Metadata
@@ -12,7 +55,8 @@
 
 Our metadata is modelled as a set of immutable objects identified by unique IDs.
 In order for two repositories $A$ and $B$ to synchronize their metadata, A should send
-to B exactly the objects $A$ has but $B$ does not (an vice versa). If $O_A$ is the set
+to B exactly the objects $A$ has but $B$ does not (an vice versa, if we want bidirectional
+synchronization). If $O_A$ is the set
 of object IDs possesed by $A$ (analogously $O_B$ for $B$), $A$ should transmit the set
 difference $O_A \setminus O_B$.
 
@@ -33,10 +77,23 @@ Instead, we will use a stateless approach. We want a protocol that allows two no
 efficiently compute the intersection $O_A ∩ O_B$ without any prior mutual information
 ($A$ knows only $O_A$ and $B$ knows only $O_B$ at the start of the exchange).
 
-This is a known problem called the *Set Reconciliation Problem*.
+This is a known problem called the *Set Reconciliation Problem*. We will present several
+existing solutions (in roughly historical order) and one original solution to this problem.
+We will focus mostly on the properties and key ideas of individual protocols than on
+details of their implementation or proofs of correctness.
+
+We will be interested not only in the total amount of data exchanged by the protocols
+but also the number of exchanges (network roundtrips) required. This is interesting
+because often, especially on mobile networks, latency is a much greater issue than
+bandwidth.
+
+Furthermore, we shall assume that the set differences are usually small compared to
+the complete sets. This seems to be the typical case in file synchronization (you
+can have a million files on your disk but you usually touch only a few dozen in one
+day). Also, if for example 
 
 ### Reconciliation Trees
 
 ### Invertible Bloom Filters
 
-### A Hybrid Solution
+### Our Approach

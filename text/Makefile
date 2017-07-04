@@ -4,7 +4,7 @@ img/%.pdf: img/%.asy
 	cd img && asy --tex=pdftex ../$<
 
 %.tex: %.md
-	pandoc -F pandoc-crossref -t latex $< -o $@ --chapters
+	pandoc -F pandoc-crossref -t latex $< -o - --chapters | ./uniproc.pl >$@
 
 # LaTeX must be run multiple times to get references right
 thesis.pdf: thesis.tex $(wildcard *.tex) $(subst .md,.tex,$(wildcard *.md)) \
