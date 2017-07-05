@@ -25,8 +25,14 @@
  \setlength\headheight{0mm}
  \let\openright=\cleardoublepage
 
+%% Generate PDF/A-2u
+\usepackage[a-2u]{pdfx}
+
 %% Character encoding: usually latin2, cp1250 or utf8:
 \usepackage[utf8]{inputenc}
+
+%% Prefer Latin Modern fonts
+\usepackage{lmodern}
 
 %% Further useful packages (included in most LaTeX distributions)
 \usepackage{amsmath}        % extensions for typesetting of math
@@ -92,12 +98,9 @@ Abstract.
 
 %% The hyperref package for clickable links in PDF and also for storing
 %% metadata to PDF (including the table of contents).
-\usepackage[pdftex,unicode]{hyperref}   % Must follow all other packages
+%% Most settings are pre-set by the pdfx package.
+\hypersetup{unicode}
 \hypersetup{breaklinks=true}
-\hypersetup{pdftitle={\ThesisTitle}}
-\hypersetup{pdfauthor={\ThesisAuthor}}
-\hypersetup{pdfkeywords=\Keywords}
-\hypersetup{urlcolor=blue}
 
 \usepackage[noend]{algpseudocode} % requires texlive-science
 \usepackage[chapter]{algorithm}
@@ -154,7 +157,8 @@ Abstract.
 %%% which will likely be used in an electronic form rather than read (program
 %%% source code, data files, interactive charts, etc.). Electronic attachments
 %%% should be uploaded to SIS and optionally also included in the thesis on a~CD/DVD.
-\chapwithtoc{Attachments}
+\appendix
+\chapter{Attachments}
 
 
 \openright
