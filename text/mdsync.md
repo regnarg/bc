@@ -153,17 +153,38 @@ some specialized tools.
 
 The following additional requirements have been set for conflict handling in Filoco:
 
-  * Conflicts must be automatically and realiably detected, so that we can
-    apply all non-conflicting changes without user intervention and inform the user
-    of any conflicts that arise.
+1.  Conflicts must be automatically and realiably detected, so that we can
+    apply all non-conflicting changes without user intervention on the one hand
+    and inform the user of any conflicts on the other.
 
-  * The user must not be forced to resolve conflicts immediately (e.g. as a part
+2.  The user should not be forced to resolve conflicts immediately (e.g. as a part
     of the synchronization process). When a conflict occurs, the synchronization
     should finish completely, synchronizing all the other changes, conflicting or
     not. The user should be able to resolve any conflict locally at a later time
     (for example when the user wants to access the affected file).
 
-  * Conflicts should not impede further synchronization.
+3.  Conflicts should not impede further synchronization. For example, if store
+    $A$ has conflicting versions $v_1$, $v_2$ of a file and later synchronizes
+    with a store $C$ that has neither, it should transfer both versions there.
+    The user can then resolve the conflict in any of the stores.
+
+4.  Once a conflict is resolved in one store, the resolution should spread to all
+    other stores. This makes the previous requirement much more useful. Of course,
+    if there were independent changes that were not part of the resolution, this
+    can create more conflicts. 
+
+We shall present a simple solution that fulfills ale these requirements. It is in
+large part based on how branching and merging works in git.
+
+Each FOV has a list of parent FOVs. Usually (except for when resolving conflicts),
+this list contains just a single item: the logically preceding version. When you
+have a version $v$ of a file on your file system and modify it, a new version $w$
+is created with a single parent $v$. The parent-child relationship signifies that
+$w$ is based on $v$, that it incorporates all the content from $v$ that the user
+did not purposefully remove, that it supersedes $v$. Whenever a store has version
+$v$ checked out\TODO{define checkout earlier} (and not locally modified) and
+acquires version $w$ through synchronization, Filoco automatically replaces
+the checked out version with $w$.
 
 ### Working revisions
 
