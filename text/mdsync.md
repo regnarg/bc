@@ -44,12 +44,64 @@ and perform synchronization, these renames will be applied there.
 Apart from the directory tree and some basic metadata like file sizes, the
 centralized metadata contains two important pieces of information:
 
+  * Data location, that is, a list of nodes that have the file's content.
+  * Data checksum. This allows detecting media failure or tampering and
+    using another data replica if available.
 
-### Local Filesystem Metadata
+### Synchronized metadata
 
-### Synchronized Metadata
+Now we shall examine the metadata structure in more detail. Metadata is modelled
+as a set of immutable *objects* of several different types (described below).
+Each object has a unique 128-bit identifier, generated etither randomly or using
+a cryptographic hash function. The result of complete synchronization between two
+stores is always the set union of their objects, although partial synchronization
+is also possible (e.g. restricted to a directory subtree).
 
-### Metadata Storage
+How can we represent changing entities (e.g. files with changing content) using
+immutable objects? In exactly the same ways as git commits are organized\TODO{link?
+https://git-scm.com/book/en/v2/Git-Internals-Git-Objects}.
+We create a new object for each version of the file, which contains references
+to the parent version(s). As in git, the version 
+
+As synchronization never deletes objects, we are currently forced to keep
+indefinite metadata revision history. A cleanup mechanism might be introduced
+in the future.
+
+The following types of objects currently exist:
+
+  * A **filesystem object (FOB)** represents one file or directory (special
+    inodes like sockets or devices are currently not supported). It serves
+    primarily as an identifier for the filesystem object that is stable across
+    renames. It also carries immutable metadata like inode type (file or
+    directory). Its ID is randomly generated.
+
+  * A **filesystem object version (FOV)** contains all the mutable metadata
+    about a FOB, namely:
+      - name (without path)
+      - ID of parent directory FOB
+      - timestamp (when this version was created)
+      - identifier of store where this version originated
+      - \TODO{a signature of the originating store (see the Security chapter)}
+      - for files:
+          * size
+          * content hash (except for working revisions, \TODO{see below})
+      - a list of parent versions (see section on conflict resolution below)
+    The ID of a FOV is a cryptographic hash of all the above fields. Because
+    those also include parent FOV IDs (which are in turn hashes of parent FOVs),
+    the FOVs form a Merkle tree\TODO{link?}. This ensures integrity of revision
+    history and prevents a compromised node from rewriting it without notice.
+
+  * A **storage record (SR)**.
+
+
+### Versioning and conflict resolution
+
+### Working revisions
+
+
+### Local filesystem metadata
+
+### Metadata storage
 
 ## The Set Reconciliation Problem
 
