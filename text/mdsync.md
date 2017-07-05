@@ -84,17 +84,86 @@ The following types of objects currently exist:
       - \TODO{a signature of the originating store (see the Security chapter)}
       - for files:
           * size
-          * content hash (except for working revisions, \TODO{see below})
+          * content hash (except for working revisions, \TODO{see below}),
+            \TODO{What exactly? Hash of whole file? Some Merkle-tree-hash
+            of blocks?}
       - a list of parent versions (see section on conflict resolution below)
+
     The ID of a FOV is a cryptographic hash of all the above fields. Because
     those also include parent FOV IDs (which are in turn hashes of parent FOVs),
     the FOVs form a Merkle tree\TODO{link?}. This ensures integrity of revision
     history and prevents a compromised node from rewriting it without notice.
 
-  * A **storage record (SR)**.
+  * \TODO{A **storage record (SR)**.}
 
+Please note that the versioning of FOBs is there only to facilitate synchronization,
+conflict resolution (see below), and auditing. We do not try to systematically
+keep the content of old file versions. Except for when conflicts occur, each store
+only keeps the newest version of any file known to it. Because of synchronization
+delays, old versions can be present in the world for quite some time but this is
+a byproduct and users should definitely not rely on that. However, the architecture
+is intentionally designed such that (optional) versioning can be implemented in the
+future.
 
 ### Versioning and conflict resolution
+
+Wherever there is bidirectional synchronization, there looms the threat
+of conflicts. Imagine that two stores $A$ and $B$ have the same version $v$ of
+a file. Then the user makes changes to the file in store $A$ (perhaps on a laptop),
+creating a new version $w_A$. Later they modify the file in store $B$,
+which still has the old version $v$ (perhaps it is on their work computer,
+because they forgot the laptop at home). They make some other, independent changes,
+creating a new version $w_B$.
+
+When they synchronize $A$ with $B$ later, both stores will have both versions
+$w_A$ and $w_B$ in their metadata database. But which of these versions should
+be considered ``current'', which version of the file should be written to the
+file system? Clearly, it is incorrect to replace $w_A$ with $w_B$ on $A$
+(even though $w_B$ has a newer timestamp), because the changes made from $v$
+to $w_A$ would be lost. It is also incorrect to just keep $w_A$ and ignore
+$w_B$, for the same reason.
+
+This situation is called a *(version) conflict* and is familiar to most readers
+from revision control systems like git. While in some simple scenarios, conflicts
+can be resolved automatically using techniques such as three-way merge or git's
+recursive merge, they often require user intervention.
+
+In Filoco, we decided to leave all conflict resolution up to the user, for three reasons:
+
+  * Conflicts should be much less common than in revision control systems. Most
+    RCS conflicts are caused by multiple people working on one project simultaneously.
+    Because our primary focus is managing personal data, we usually expect only one
+    person making changes to files in a Filoco world. But conflicts certainly can
+    happen, e.g. because of delayed synchronization and offline stores, as suggested
+    by the scenario above.
+
+  * We are not limited to source code or plain text and have to handle all kinds of
+    files including binary (LibreOffice documents, images, archives, databases\dots).
+    There is no universal conflict resolution strategy for such a wide variantion of
+    file types.
+
+  * As we do not systematically keep the content of old file versions, the common
+    parent of the two conflicting versions is not guaranteed
+    to be available at the time of resolution, which precludes using most
+    classical conflict-resolution strategies based on three-way merge and it variants.
+
+Thus when a conflict occurs, we simply present the user with both the conflicting
+versions and they have to somehow merge their content, either manually or by using
+some specialized tools.
+
+The following additional requirements have been set for conflict handling in Filoco:
+
+  * Conflicts must be automatically and realiably detected, so that we can
+    apply all non-conflicting changes without user intervention and inform the user
+    of any conflicts that arise.
+
+  * The user must not be forced to resolve conflicts immediately (e.g. as a part
+    of the synchronization process). When a conflict occurs, the synchronization
+    should finish completely, synchronizing all the other changes, conflicting or
+    not. The user should be able to resolve any conflict locally at a later time
+    (for example when the user wants to access the affected file).
+
+  * Conflicts should not impede further synchronization.
 
 ### Working revisions
 
