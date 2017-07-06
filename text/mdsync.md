@@ -171,7 +171,11 @@ The following additional requirements have been set for conflict handling in Fil
 4.  Once a conflict is resolved in one store, the resolution should spread to all
     other stores. This makes the previous requirement much more useful. Of course,
     if there were independent changes that were not part of the resolution, this
-    can create more conflicts. 
+    can create more conflicts.
+
+5. It should be possible to rename or move a file in one store and edit it in
+   another without this being considered a conflict.
+
 
 We shall present a simple solution that fulfills ale these requirements. It is in
 large part based on how branching and merging works in git.
@@ -185,6 +189,38 @@ did not purposefully remove, that it supersedes $v$. Whenever a store has versio
 $v$ checked out\TODO{define checkout earlier} (and not locally modified) and
 acquires version $w$ through synchronization, Filoco automatically replaces
 the checked out version with $w$.
+
+The parent-child relation (or more precisely, its transitive closure) describes
+a partial ordering on the versions. As long as you keep your replicas up to date
+and always edit only the chronologically newest version of the file, the ordering
+is linear (the version graph is a path) and there is a unique maximum ("newest
+verson").
+
+
+However, when you make changes to an older version of the file (in a store that
+is not up to date) and later synchronize them, the history branches, as shown
+in [@fig:branch]). Now the version ordering has multiple maximal elements (we
+call these *heads*). This we shall consider the definition of a conflict state,
+which will be announced to the user.
+
+After the user resolves the conflict, a new version (marked $z$ in the figure)
+is created with all the previously conflicting versions as parents. Now there
+is again a unique head and thus no conflict. After another resynchronization,
+the resolution is spread to $B$, which automatically checks out $z$ instead
+of either $w_1$ or $w_2$.
+
+As noted above, this is very similar to git branching and merging, with several
+differences:
+
+  * Versioning is done per file instead of the whole repository. This allows
+    resolving conflicts individually and leaving some unresolved for a later
+    time.
+  * Branching is implicit. It works as if whenever you were trying to do
+    a non-fast-forward push in git, instead of rejecting it, a new unnamed
+    branch would be automatically created. This allows synchronization in
+    the presence of conflicts and delayed conflict resolution.
+
+![History branching during a conflict\label{branch}](img/branch.pdf){#fig:branch}
 
 ### Working revisions
 
