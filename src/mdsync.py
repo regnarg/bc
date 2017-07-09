@@ -7,9 +7,9 @@ logging.basicConfig(level=logging.DEBUG)
 from utils import *
 from store import *
 import struct
-import cbor
+import cbor, json
 
-init_debug(['synctree'])
+init_debug(['synctree', 'sendobj'])
 
 PROTOCOL = 1
 
@@ -118,10 +118,12 @@ class MDSync(Protocol):
     def __init__(self, store, file):
         super().__init__(file=file)
         self.store = store
+        self.db = store.db
+        self.synctree = store.synctree
 
     def get_xors(self, positions):
         # TODO: is this better than several queries that can be precompiled?
-        ret = self.store.db.query('select pos, xor, chxor from synctree where pos in (%s)'
+        ret = self.db.query('select pos, xor, chxor from synctree where pos in (%s)'
                                    % ','.join(repeat('?', len(positions))), *positions)
         return { row['pos'] : (row['xor'], row['chxor']) for row in ret }
 
@@ -179,15 +181,14 @@ class MDSync(Protocol):
 
                 diff = binxor(my_val, their_val)
                 if SyncTree.hash_chk(diff) == binxor(my_chk, their_chk): # only single chnage in subtree
-                    if self.store.synctree.has(diff):
+                    if self.synctree.has(diff):
                         send_objects.append(diff)
                     continue
 
                 # all other cases: we have two different non-trivial subtrees, recurse on both ends
                 if lvl_num == SyncTree.LEVELS - 1:
                     if D_SYNCTREE: log.debug("...leaf collision")
-                    # More changes in one leaf, need to use some additional info to reconstruct individual IDs
-                    raise NotImplementedError
+                    send_subtrees.append(vert)
                 else:
                     if D_SYNCTREE: log.debug("...recursing")
                     child_base = vert << SyncTree.BITS_PER_LEVEL
@@ -199,10 +200,40 @@ class MDSync(Protocol):
         if D_SYNCTREE:
             logging.debug('Send subtrees: %r', send_subtrees)
             logging.debug('Send objects: %r', send_objects)
+        return send_subtrees, send_objects
+
+    async def send_by_syncable_row(self, row):
+        type = row['kind']
+        tbl = Store.TYPE2TABLE[type]
+        obj = self.db.query_first('select * from %s where id=?'%tbl, row['id'])
+        if D_SENDOBJ:
+            log.debug('sending object %s', json.dumps((type, obj)))
+        self.write_cbor((type, obj))
+
+    async def send_objects(self, send_subtrees, send_objects):
+        for oid in send_objects:
+            await self.send_by_syncable_row(self.db.query_first("select * from syncables where id=?", oid))
+        for vert in send_subtrees:
+            minkey, maxkey = self.synctree.subtree_key_range(vert)
+            for row in self.db.query("select * from syncables where tree_key >= ? and tree_key < ?",
+                                    minkey, maxkey):
+                await self.send_by_syncable_row(row)
+
+
+    async def recv_objects(self):
+        pass
+
+    async def exchange_objects(self, send_subtrees, send_objects):
+        send_task = asyncio.ensure_future(self.send_objects(send_subtrees, send_objects))
+        recv_task = asyncio.ensure_future(self.recv_objects())
+        done, pending = await asyncio.wait([send_task, recv_task],
+                                return_when=asyncio.ALL_COMPLETED)
+        return [ x.result() for x in done ]
 
     async def run(self):
         await self.prepare()
-        await self.do_synctree()
+        send_subtrees, send_objects = await self.do_synctree()
+        await self.exchange_objects(send_subtrees, send_objects)
 
 def main(args):
     # .buffer is for binary stdio

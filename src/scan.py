@@ -329,7 +329,7 @@ class Scanner:
     def on_link(self, parent_info, parent_obj, name, info, obj, old_obj=None):
         if not obj.oid and info.type in ('d', 'r'):
             with self.db.ensure_transaction():
-                oid = self.store.create_object(type=info.type, name=name, parent=parent_obj.oid)
+                oid = self.store.create_fob(type=info.type, name=name, parent=parent_obj.oid)
                 self.db.update('inodes', 'iid=?', obj.iid, oid=oid)
 
     def delete_inode(self, info):

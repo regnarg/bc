@@ -35,9 +35,14 @@ create table fslog (
 ---- SYNCHRONIZED METADATA ----
 
 create table syncables (
+    tree_key integer,
     id text unique,
     kind text
 );
+
+
+-- Used when querying subtrees (represented by consecutive key intervals).
+create index syncables_tree_key on syncables (tree_key);
 
 create table synctree (
     pos integer primary key,
@@ -45,14 +50,14 @@ create table synctree (
     chxor blob
 );
 
-create table objects (
-    oid text unique references syncable(id),
+create table fobs (
+    id text unique references syncables(id),
     type text
 );
 
-create table versions (
-    vid text unique references syncable(id),
-    oid text references objects(oid),
+create table fovs (
+    id text unique references syncables(id),
+    fob text references fobs(id),
     parent_versions text
 );
 

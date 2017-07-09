@@ -65,12 +65,20 @@ class SyncTree:
 
     def add(self, id, kind):
         with self.db.ensure_transaction():
-            self.db.insert('syncables', _on_conflict='ignore', id=id, kind=kind)
+            bin_id = codecs.decode(id, 'hex')
+            self.db.insert('syncables', _on_conflict='ignore', id=id, kind=kind, tree_key=self.hash_pos(bin_id))
             if self.db.changes():
                 self._update_synctree(id)
 
     def has(self, id):
         return bool(self.db.query_first('select 1 from syncables where id=?', id))
+
+    def subtree_key_range(self, pos):
+        left = right = pos
+        while not left & self.LEAF:
+            left <<= 1
+            right = (right << 1) + 1
+        return left, right
 
     @classmethod
     def hash_pos(cls, id):
@@ -114,6 +122,8 @@ class Store:
     root_fd = None
     meta_fd = None
     SQLITE_CACHE_MB = 256
+    TYPE2TABLE = {'fob': 'fobs', 'fov': 'fovs'}
+
     def __init__(self, root):
         if isinstance(root, int):
             root = FD(root)
@@ -186,11 +196,11 @@ class Store:
             fd._close()
             return True
 
-    def create_object(self, *, type, name=None, parent=None):
-        oid = gen_uuid()
+    def create_fob(self, *, type, name=None, parent=None):
+        id = gen_uuid()
         with self.db.ensure_transaction():
-            self.db.insert('objects', oid=oid, type=type)
-            self.synctree.add(oid, 'object')
+            self.db.insert('fobs', id=id, type=type)
+            self.synctree.add(id, 'fob')
 
 
 def stat_tuple(st):
