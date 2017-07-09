@@ -34,8 +34,8 @@ class Protocol:
         self.write_sized(cbor.dumps(obj))
 
     async def read_sized(self):
-        size = struct.unpack(self.SIZE_FMT, await self.in_stream.read(self.SIZE_BYTES))[0]
-        return await self.in_stream.read(size)
+        size = struct.unpack(self.SIZE_FMT, await self.in_stream.readexactly(self.SIZE_BYTES))[0]
+        return await self.in_stream.readexactly(size)
 
     async def read_cbor(self):
         body = await self.read_sized()
