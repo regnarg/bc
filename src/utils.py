@@ -30,7 +30,7 @@ class AttrDict(dict):
     """A dictionary that allows access to items using the attribute syntax."""
     def __getattr__(self, name):
         try: return self[name]
-        except KeyError: raise AttributeEror(name)
+        except KeyError: raise AttributeError(name)
     def __setattr__(self, name, val):
         self[name] = val
 def docopt_attr(doc, *a, **kw):

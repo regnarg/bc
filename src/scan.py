@@ -190,8 +190,8 @@ class Scanner:
         (e.g. when its handle cannot be opened)"""
         with self.db.ensure_transaction():
             self.db.execute('delete from inodes where iid=?', iid)
-            if self.db.changes():
-                self.db.insert('fslog', event=EVENT_DELETE, iid=iid)
+            #if self.db.changes():
+            #    self.db.insert('fslog', event=EVENT_DELETE, iid=iid)
 
     def find_inode(self, info, *, is_root=False, create=True):
         handle = info.get_handle()
@@ -215,7 +215,7 @@ class Scanner:
                 # the inode, it cannot just disappear and thus we are writing correct data.
                 self.db.insert('inodes', ino=ino, handle=handle, iid=iid, type=ftype,
                                 size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime)
-                self.db.insert('fslog', event=EVENT_CREATE, iid=iid)
+                #self.db.insert('fslog', event=EVENT_CREATE, iid=iid)
                 if ftype == 'd':
                     self.push_scan(SR_SCAN, info)
                 ret = self.db.query_first('select * from inodes where ino=?', ino)
@@ -249,8 +249,9 @@ class Scanner:
             #self.store.delete_object(info) # TODO delete from database
             return
         disk_tuple = (st.st_size, st.st_mtime, st.st_ctime)
-        db_tuple = self.db.query_first('select size, mtime, ctime from inodes where iid=?', info.iid)
+        db_tuple = self.db.query_first('select size, mtime, ctime from inodes where iid=?', info.iid, _assoc=False)
         if disk_tuple != db_tuple:
+            if D_SCAN: log.debug('Change! db tuple: %r, fs tuple: %r', db_tuple, disk_tuple)
             # Probably better to scan now than queue it because the inode is already
             # in cache.
             self.scan(info, fresh_stat=True)
@@ -302,23 +303,26 @@ class Scanner:
                         self.db.insert('links', ino=obj.ino, parent=dirobj.ino,
                                     name=entry.name)
                         self.on_link(dirinfo, dirobj, entry.name, info, obj, old_obj)
-                        self.db.insert('fslog', event=EVENT_LINK, iid=obj.iid, parent_iid=dirobj.iid,
-                                                name=entry.name)
+                        #self.db.insert('fslog', event=EVENT_LINK, iid=obj.iid, parent_iid=dirobj.iid,
+                        #                        name=entry.name)
                 if recursive and stat.S_ISDIR(info.stat.st_mode):
                     self.push_scan(SR_SCAN_RECURSIVE, info)
             to_del = []
             for obj in self.db.query('select rowid, name from links where parent=?', dirobj.ino):
                 if obj.name not in seen:
-                    log.debug("Ulinking %s from %s" % (obj.name, frealpath(dirinfo.fd)))
-                    self.db.insert('fslog', event=EVENT_UNLINK, iid=obj.iid, parent_iid=dirobj.iid,
-                                            name=entry.name)
+                    if D_MDUPDATE:
+                        log.debug("Ulinking %s from %s" % (obj.name, frealpath(dirinfo.fd)))
+                    to_del.append((obj['rowid'],))
+                    #self.db.insert('fslog', event=EVENT_UNLINK, iid=obj.iid, parent_iid=dirobj.iid,
+                    #                        name=entry.name)
             if to_del:
                 self.db.executemany('delete from links where rowid=?', to_del)
             st_end = dirinfo.get_stat(force=True)
             if stat_tuple(st_start) == stat_tuple(st_end):
                 # No racy changes during scan
-                self.db.update('inodes','ino=?', dirobj.ino, scan_state=SCAN_UP_TO_DATE)
+                self.db.update('inodes','ino=?', dirobj.ino, scan_state=SCAN_UP_TO_DATE, **stat_tuple(st_end))
             else:
+                log.warn("Race condition during directory scan of %r, needs further rescan")
                 self.db.update('inodes','ino=?', dirobj.ino, scan_state=SCAN_NEEDS_RESCAN)
                 # TODO schedule delayed rescan (exp. backoff ideally)
 

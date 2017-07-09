@@ -190,5 +190,4 @@ class Store:
 
 
 def stat_tuple(st):
-    # TODO: order?
-    return (st.st_mtime, st.st_ctime, st.st_size, st.st_ino)
+    return {'mtime': st.st_mtime, 'ctime': st.st_ctime, 'size': st.st_size, 'ino': st.st_ino}
