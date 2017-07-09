@@ -166,6 +166,7 @@ class Store:
 
     def open_db(self):
         self.db = SqliteWrapper('/proc/self/fd/%d/meta.sqlite' % self.meta_fd, wal=True)
+        self.db.execute('PRAGMA wal_autocheckpoint=20000')
         self.db.connection.enableloadextension(True)
         self.db.connection.loadextension(str(FILOCO_LIBDIR / 'binxor.so'))
 
