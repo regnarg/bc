@@ -367,15 +367,19 @@ class Scanner:
         """A coroutine that consumes the scan queue and runs scan() appropriately."""
         log.debug("scan_worker started")
         while True:
-            if self.scan_queue.empty():
-                self.queue_unscanned()
-            if self.scan_queue.empty():
-                break
-            sr = await self.scan_queue.get()
-            if D_QUEUE: log.debug('Popped %r', sr)
-            self.process_sr(sr)
-            # If the queue is long (e.g. during a full rescan), we need to give
-            # the event loop a chance to run.
+            with self.db:
+                for i in range(500):
+                    if self.scan_queue.empty():
+                        self.queue_unscanned()
+                    if self.scan_queue.empty():
+                        break
+                    sr = await self.scan_queue.get()
+                    if D_QUEUE: log.debug('Popped %r', sr)
+                    self.process_sr(sr)
+                    # If the queue is long (e.g. during a full rescan), we need to give
+                    # the event loop a chance to run.
+                if self.scan_queue.empty():
+                    break
             await asyncio.sleep(0) # https://github.com/python/asyncio/issues/284
         self.scan_task = None
 
@@ -402,7 +406,8 @@ class Scanner:
         self.init()
         if self.watch_mode == 'none':
             if self.scan_task:
-                self.loop.run_until_complete(self.scan_task)
+                #with self.db: # XXX
+                    self.loop.run_until_complete(self.scan_task)
         else:
             self.loop.run_forever()
 

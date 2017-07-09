@@ -229,6 +229,16 @@ differences:
 
 ### Metadata storage
 
+\TODO{Optimizations:}
+
+  * in general: prevent seeks between scanned inodes and db
+  * try fully in-memory db (tmpfs, cache changes?)
+  * WAL + synchronous=normal
+  * checkpoint interval
+  * larger transactions
+  * sqlite page cache size
+
+
 ## The Set Reconciliation Problem
 
 Our metadata is modelled as a set of immutable objects identified by unique IDs.

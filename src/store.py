@@ -113,6 +113,7 @@ def lazy(init_func):
 class Store:
     root_fd = None
     meta_fd = None
+    SQLITE_CACHE_MB = 256
     def __init__(self, root):
         if isinstance(root, int):
             root = FD(root)
@@ -166,7 +167,10 @@ class Store:
 
     def open_db(self):
         self.db = SqliteWrapper('/proc/self/fd/%d/meta.sqlite' % self.meta_fd, wal=True)
+        # TODO set those only for large scans and not live updates?
         self.db.execute('PRAGMA wal_autocheckpoint=20000')
+        # https://www.sqlite.org/pragma.html#pragma_cache_size
+        self.db.execute('PRAGMA cache_size=%d' % (- self.SQLITE_CACHE_MB*1024))
         self.db.connection.enableloadextension(True)
         self.db.connection.loadextension(str(FILOCO_LIBDIR / 'binxor.so'))
 
