@@ -2,7 +2,6 @@
 
 import logging
 log = logging.getLogger('filoco.mdsync')
-logging.basicConfig(level=logging.DEBUG)
 
 from utils import *
 from store import *
@@ -181,8 +180,10 @@ class MDSync(Protocol):
 
                 diff = binxor(my_val, their_val)
                 if SyncTree.hash_chk(diff) == binxor(my_chk, their_chk): # only single chnage in subtree
-                    if self.synctree.has(diff):
-                        send_objects.append(diff)
+                    if D_SYNCTREE: log.debug('Single change: %s', binhex(diff))
+                    hex_id = binhex(diff)
+                    if self.synctree.has(hex_id):
+                        send_objects.append(hex_id)
                     continue
 
                 # all other cases: we have two different non-trivial subtrees, recurse on both ends
@@ -209,19 +210,36 @@ class MDSync(Protocol):
         if D_SENDOBJ:
             log.debug('sending object %s', json.dumps((type, obj)))
         self.write_cbor((type, obj))
+        await self.out_stream.drain()
 
     async def send_objects(self, send_subtrees, send_objects):
+        rows = []
         for oid in send_objects:
-            await self.send_by_syncable_row(self.db.query_first("select * from syncables where id=?", oid))
+            rows.append(self.db.query_first("select serial, id, kind from syncables where id=?", oid))
         for vert in send_subtrees:
             minkey, maxkey = self.synctree.subtree_key_range(vert)
-            for row in self.db.query("select * from syncables where tree_key >= ? and tree_key < ?",
-                                    minkey, maxkey):
-                await self.send_by_syncable_row(row)
+            rows += self.db.query("select serial, id, kind from syncables where tree_key >= ? and tree_key < ?",
+                                    minkey, maxkey)
+        # We need to send objects in insertion order, so that other side can
+        # recreate them without violating foreign key constraints
+        rows.sort(key=lambda row: row['serial'])
+        for row in rows:
+            await self.send_by_syncable_row(row)
+        self.write_sized(b'')
+        await self.out_stream.drain()
 
 
     async def recv_objects(self):
-        pass
+        while True:
+            for i in range(1000):
+                # XXX this transacton affects the concurrent sebd task! is it a problem?
+                with self.db:
+                    data = await self.read_sized()
+                    if not data: break
+                    kind, attrs = cbor.loads(data)
+                    id = attrs.pop('id')
+                    self.store.add_syncable(id, kind, **attrs)
+            if not data: break
 
     async def exchange_objects(self, send_subtrees, send_objects):
         send_task = asyncio.ensure_future(self.send_objects(send_subtrees, send_objects))

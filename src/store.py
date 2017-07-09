@@ -188,9 +188,9 @@ class Store:
         finally:
             if dfd is not None: os.close(dfd)
 
-    def add_syncable(self, id, kind):
-        self.db.insert('syncables', id=id, kind=kind)
-        self.synctree.add(id)
+    def add_syncable(self, id, kind, **data):
+        self.synctree.add(id, kind)
+        self.db.insert(self.TYPE2TABLE[kind], id=id, **data)
 
     def open_db(self):
         self.db = SqliteWrapper('/proc/self/fd/%d/meta.sqlite' % self.meta_fd, wal=True)

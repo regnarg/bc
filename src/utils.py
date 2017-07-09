@@ -15,6 +15,9 @@ from pathlib import Path
 
 FILOCO_LIBDIR = Path(__file__).parent.resolve()
 
+log_prefix = os.environ.get('FILOCO_LOGPREFIX')
+logging.basicConfig(level=logging.DEBUG, format=(log_prefix+': ' if log_prefix else '')+'%(message)s')
+
 def init_debug(cats):
     enabled_cats = os.environ.get('FILOCO_DBG', '').split(',')
     glob = sys._getframe(1).f_globals

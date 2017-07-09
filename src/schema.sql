@@ -35,6 +35,7 @@ create table fslog (
 ---- SYNCHRONIZED METADATA ----
 
 create table syncables (
+    serial integer primary key autoincrement,
     tree_key integer,
     id text unique,
     kind text
