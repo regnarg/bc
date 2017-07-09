@@ -104,6 +104,22 @@ class SyncTree:
             pos >>= self.BITS_PER_LEVEL
 
 
+    # def create_trigger(self):
+    #     for (event, rec) in (('insert', 'new'), ('delete', 'old')):
+    #         zero = 'zeroblob(%d)' % (self.ID_BITS // 8)
+    #         l = ['create temp trigger update_synctree_{event} after {event} on syncables begin'.format(event=event)]
+    #         for shift in range(self.LEVELS):
+    #             pos = '(%s.tree_key >> %d)' % (rec, shift)
+    #             l.append('insert or ignore into synctree values ({pos},{zero},{zero});'.format(rec=rec, pos=pos, zero=zero))
+    #             l.append("update synctree set xor=binxor(xor, {rec}.id), chxor=binxor(chxor,{rec}.chk) where pos={pos};"
+    #                         .format(shift=shift, rec=rec, pos=pos))
+    #             l.append("delete from synctree where pos=pos and xor={zero};"
+    #                         .format(shift=shift, pos=pos, zero=zero))
+    #         l.append('end;')
+    #         #print('\n'.join(l))
+    #         self.db.execute('\n'.join(l))
+
+
 def lazy(init_func):
     from functools import wraps
     attr = '_' + init_func.__name__
@@ -138,6 +154,7 @@ class Store:
         self.meta_fd = FD.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
         self.open_db()
         self.synctree = SyncTree(self.db)
+        #self.synctree.create_trigger()
 
     #@lazy
     #def db(self):
