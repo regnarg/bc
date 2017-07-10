@@ -6,6 +6,9 @@ orig 0 108.3 0
 orig 1 254.9 0
 rand 0 694.8 0
 
+find -size +1  4:41
+find           4:13
+
 ## kerio /home (ext3, 2M inodes)
 
 orig 0 330.6 0

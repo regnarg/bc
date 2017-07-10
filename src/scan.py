@@ -248,8 +248,8 @@ class Scanner:
             self.delete_inode(info)
             #self.store.delete_object(info) # TODO delete from database
             return
-        disk_tuple = (st.st_size, st.st_mtime, st.st_ctime)
-        db_tuple = self.db.query_first('select size, mtime, ctime from inodes where iid=?', info.iid, _assoc=False)
+        disk_tuple = (st.st_size, st.st_mtime, st.st_ctime, SCAN_UP_TO_DATE)
+        db_tuple = self.db.query_first('select size, mtime, ctime, scan_state from inodes where iid=?', info.iid, _assoc=False)
         if disk_tuple != db_tuple:
             if D_SCAN: log.debug('Change! db tuple: %r, fs tuple: %r', db_tuple, disk_tuple)
             # Probably better to scan now than queue it because the inode is already

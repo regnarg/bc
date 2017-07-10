@@ -1,14 +1,23 @@
 #!/usr/bin/python3
 """
-Usage: init.py [DIR]
+Usage: init.py [--synctree] -n NAME [DIR]
 
 Create a new empty Filoco store in a given directory or the current working directory.
+
+Options:
+  -n NAME     Set repository name
+  --synctree  Use tree-based metadata synchronization (slower).
+              NOTE: All stores need to use the same sync method.
 """
 
 import sys, os, tempfile, shutil
+import jinja2
 
 from utils import *
 from store import *
+from OpenSSL import crypto
+
+RSA_KEY_SIZE = 2048 # TODO make configurable
 
 _schema_dirs = [ os.path.dirname(__file__), '/usr/share/filoco' ]
 for _loc in _schema_dirs:
@@ -19,7 +28,7 @@ for _loc in _schema_dirs:
 else:
     raise RuntimeError("Unable to find 'schema.sql' in %r" % _schema_dirs)
 
-def main(dir = '.'):
+def main(dir = '.', synctree=False, n=None):
     if dir: os.chdir(dir or '.')
     try: store = Store.find()
     except StoreNotFound: pass
@@ -30,8 +39,38 @@ def main(dir = '.'):
         spurt('.filoco.tmp/version', "1")
         spurt('.filoco.tmp/type', "fs")
         db = SqliteWrapper('.filoco.tmp/meta.sqlite', wal=True)
-        db.execute(slurp(SCHEMA_FILE))
+        sync_mode = 'synctree' if synctree else 'serial'
+        spurt('.filoco.tmp/sync_mode', sync_mode)
+        tpl = jinja2.Template(slurp(SCHEMA_FILE), line_statement_prefix='#')
+        schema = tpl.render(sync_mode=sync_mode)
+        db.execute(schema)
+
+        key = crypto.PKey()
+        key.generate_key(crypto.TYPE_RSA, RSA_KEY_SIZE)
+        priv_key = crypto.dump_privatekey(crypto.FILETYPE_PEM, key)
+        pub_key = crypto.dump_publickey(crypto.FILETYPE_PEM, key)
+
+        cert = crypto.X509()
+        cert.get_subject().CN = n
+        cert.set_serial_number(1000)
+        cert.gmtime_adj_notBefore(0)
+        cert.gmtime_adj_notAfter(10*365*24*60*60)
+        cert.set_issuer(cert.get_subject())
+        cert.set_pubkey(key)
+        cert.sign(key, 'sha256')
+
+        store_id = cert.digest('sha256').decode('ascii').replace(':','')
+        spurt('.filoco.tmp/store_id', store_id)
+
+        db.insert('stores', idx=0, fingerprint=store_id)
+
+        spurt('.filoco.tmp/store_cert', crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode('ascii'))
+        with open('.filoco.tmp/store_key', 'wb') as file:
+            os.chmod('.filoco.tmp/store_key', 0o600)
+            file.write(priv_key)
+
         os.rename('.filoco.tmp', '.filoco')
+        
     except:
         try: shutil.rmtree('.filoco.tmp')
         except OSError: pass

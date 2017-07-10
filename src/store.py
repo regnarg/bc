@@ -153,6 +153,7 @@ class Store:
         self.meta_path = os.path.join(self.root_path, META_DIR)
         self.meta_fd = FD.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
         self.open_db()
+        self.sync_mode = slurp(os.path.join(self.meta_path, 'sync_mode'))
         self.synctree = SyncTree(self.db)
         #self.synctree.create_trigger()
 
@@ -189,7 +190,10 @@ class Store:
             if dfd is not None: os.close(dfd)
 
     def add_syncable(self, id, kind, **data):
-        self.synctree.add(id, kind)
+        if self.sync_mode == 'synctree':
+            self.synctree.add(id, kind)
+        else:
+            self.db.execute('insert into syncables_local (id, kind) values (?, ?)', id, kind)
         self.db.insert(self.TYPE2TABLE[kind], id=id, **data)
 
     def open_db(self):
@@ -215,9 +219,7 @@ class Store:
 
     def create_fob(self, *, type, name=None, parent=None):
         id = gen_uuid()
-        with self.db.ensure_transaction():
-            self.db.insert('fobs', id=id, type=type)
-            self.synctree.add(id, 'fob')
+        self.add_syncable(id, 'fob')
 
 
 def stat_tuple(st):

@@ -215,14 +215,14 @@ class MDSync(Protocol):
     async def send_objects(self, send_subtrees, send_objects):
         rows = []
         for oid in send_objects:
-            rows.append(self.db.query_first("select serial, id, kind from syncables where id=?", oid))
+            rows.append(self.db.query_first("select insert_order, id, kind from syncables where id=?", oid))
         for vert in send_subtrees:
             minkey, maxkey = self.synctree.subtree_key_range(vert)
-            rows += self.db.query("select serial, id, kind from syncables where tree_key >= ? and tree_key < ?",
+            rows += self.db.query("select insert_order, id, kind from syncables where tree_key >= ? and tree_key < ?",
                                     minkey, maxkey)
         # We need to send objects in insertion order, so that other side can
         # recreate them without violating foreign key constraints
-        rows.sort(key=lambda row: row['serial'])
+        rows.sort(key=lambda row: row['insert_order'])
         for row in rows:
             await self.send_by_syncable_row(row)
         self.write_sized(b'')
