@@ -214,7 +214,8 @@ class Scanner:
                 # We can insert safely without any locking. Because we hold an open FD to
                 # the inode, it cannot just disappear and thus we are writing correct data.
                 self.db.insert('inodes', ino=ino, handle=handle, iid=iid, type=ftype,
-                                size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime)
+                                size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime,
+                                scan_state=(SCAN_NEVER_SCANNED if ftype=='d' else SCAN_UP_TO_DATE))
                 #self.db.insert('fslog', event=EVENT_CREATE, iid=iid)
                 if ftype == 'd':
                     self.push_scan(SR_SCAN, info)
