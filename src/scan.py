@@ -3,6 +3,7 @@
 import sys, os, posix, stat
 import logging
 import asyncio
+from subprocess import check_call
 
 import libmount
 from butter.fanotify import *
@@ -273,6 +274,7 @@ class Scanner:
         assert dirinfo.iid
         with self.db.ensure_transaction():
             for entry in fdscandir(dirinfo.get_fd()):
+                if entry.name == '.filoco': continue
                 try:
                     entry.name.encode('utf-8')
                 except UnicodeEncodeError:
@@ -343,14 +345,15 @@ class Scanner:
         self.find_inode(info, is_root=True)
         return info
 
-
     def queue_unscanned(self, action=SR_SCAN):
-        limit = self.scan_queue.maxsize - self.scan_queue.qsize()
-        # TRICK: This query efficiently (ab)uses the (type, scan_state, ino)
+        #limit = self.scan_queue.maxsize - self.scan_queue.qsize()
+        # TRICK: This query efficiently (ab)uses the (scan_state, ino)
         # index: the matching rows form a contiguous segment, which is already
         # sorted by inode number *EVIL GRIN*.
-        for row in self.db.query("select * from inodes where type='d' and scan_state < ? order by ino limit ?",
-                                    SCAN_UP_TO_DATE, limit):
+        #for row in self.db.query("select * from inodes where scan_state < ? order by ino limit ?",
+        #                            SCAN_UP_TO_DATE, limit):
+        for row in self.db.query("select * from inodes where scan_state < ? order by ino",
+                                    SCAN_UP_TO_DATE):
             self.push_scan(action, InodeInfo.from_db(self.store, row))
 
     def process_sr(self, sr):
@@ -400,7 +403,9 @@ class Scanner:
             if self.recursive:
                 self.push_scan(SR_SCAN_RECURSIVE, self.get_root())
             else:
-                self.scan_by_query('1', action=SR_CHECK)
+                #self.scan_by_query('1', action=SR_CHECK)
+                check_call([FILOCO_LIBDIR/'check_helper', self.store.root_path])
+                self.queue_unscanned()
         if self.watch_mode == 'fanotify':
             self.loop.create_task(self.fanotify_worker())
 

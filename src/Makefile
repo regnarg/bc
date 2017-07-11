@@ -1,3 +1,7 @@
+all: binxor.so check_helper
+
+check_helper: check_helper.cpp
+	g++ -Wall -lsqlite3 -std=gnu++11 -o$@ $<
 
 binxor.so: binxor.c
-	gcc -g -fPIC -shared $< -o $@
+	gcc -Wall -g -fPIC -shared $< -o $@
