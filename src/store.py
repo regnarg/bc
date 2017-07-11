@@ -63,10 +63,10 @@ class SyncTree:
     def __init__(self, db):
         self.db = db
 
-    def add(self, id, kind):
+    def add(self, id, kind, **kw):
         with self.db.ensure_transaction():
             bin_id = codecs.decode(id, 'hex')
-            self.db.insert('syncables', _on_conflict='ignore', id=id, kind=kind, tree_key=self.hash_pos(bin_id))
+            self.db.insert('syncables', _on_conflict='ignore', id=id, kind=kind, tree_key=self.hash_pos(bin_id), **kw)
             if self.db.changes():
                 self._update_synctree(id)
 
@@ -154,8 +154,11 @@ class Store:
         self.meta_fd = FD.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
         self.open_db()
         self.sync_mode = slurp(os.path.join(self.meta_path, 'sync_mode'))
-        self.synctree = SyncTree(self.db)
-        #self.synctree.create_trigger()
+        if self.sync_mode == 'synctree':
+            self.synctree = SyncTree(self.db)
+            #self.synctree.create_trigger()
+        self.store_id_cache = {}
+        self.store_idx_cache = {}
 
     #@lazy
     #def db(self):
@@ -189,11 +192,19 @@ class Store:
         finally:
             if dfd is not None: os.close(dfd)
 
-    def add_syncable(self, id, kind, **data):
+    def add_syncable(self, id, kind, origin=None, serial=None, **data):
+        if origin is None: origin_idx = 0
+        else: origin_idx = self.get_store_idx(origin)
+
         if self.sync_mode == 'synctree':
-            self.synctree.add(id, kind)
+            self.synctree.add(id, kind, origin_idx=origin_idx)
         else:
-            self.db.execute('insert into syncables_local (id, kind) values (?, ?)', id, kind)
+            if serial is None:
+                assert origin is None
+                self.db.execute('insert into syncables_local (id, kind) values (?, ?)', id, kind)
+            else:
+                self.db.execute('insert into syncables (id, kind, origin_idx, serial) values (?, ?, ?, ?)',
+                                    id, kind, origin_idx, serial)
         self.db.insert(self.TYPE2TABLE[kind], id=id, **data)
 
     def open_db(self):
@@ -220,6 +231,24 @@ class Store:
     def create_fob(self, *, type, name=None, parent=None):
         id = gen_uuid()
         self.add_syncable(id, 'fob')
+
+    def get_store_idx(self, id):
+        try: return self.store_idx_cache[id]
+        except KeyError: pass
+        row = self.db.query_first('select idx from stores where id=?', id)
+        if row is None:
+            self.db.execute('insert or ignore into stores (id) values (?)', id)
+            row = self.db.query_first('select idx from stores where id=?', id)
+        self.store_idx_cache[id] = idx = row['idx']
+        return idx
+    def get_store_id(self, idx):
+        try: return self.store_id_cache[idx]
+        except KeyError: pass
+        row = self.db.query_first('select idx from stores where id=?', id)
+        if row is None:
+            raise KeyError(idx)
+        self.store_id_cache[idx] = id = row['id']
+        return id
 
 
 def stat_tuple(st):

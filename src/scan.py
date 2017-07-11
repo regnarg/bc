@@ -109,7 +109,7 @@ class InodeInfo:
         return 'InodeInfo(%s)' % args
 
 
-ScanRequest = namedtuple('ScanRequest', 'prio action target')
+ScanRequest = namedtuple('ScanRequest', 'prio seq action target')
 # An item in the scan queue.
 # prio: the sort priority (usually the inode number to faciliate sequential access,
 #       but it could also be real importance-based priority)
@@ -134,6 +134,7 @@ class Scanner:
         self.root_fd = self.store.root_fd
         self.scan_queue = asyncio.PriorityQueue(self.SCAN_QUEUE_SIZE)
         self.queue_fds = 0
+        self.last_queue_seq = 0
         self.loop = asyncio.get_event_loop()
         self.watch_mode = watch_mode
         if init_scan is None:
@@ -231,7 +232,8 @@ class Scanner:
         if self.queue_fds >= self.QUEUE_MAX_FDS:
             target.release_fd()
         prio = target.ino or 0
-        sr = ScanRequest(prio, action, target)
+        self.last_queue_seq += 1
+        sr = ScanRequest(prio, self.last_queue_seq, action, target)
         if D_QUEUE: log.debug("Queueing %r", sr)
         self.scan_queue.put_nowait(sr)
         if target.fd: self.queue_fds += 1

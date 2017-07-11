@@ -62,7 +62,7 @@ def main(dir = '.', synctree=False, n=None):
         store_id = cert.digest('sha256').decode('ascii').replace(':','')
         spurt('.filoco.tmp/store_id', store_id)
 
-        db.insert('stores', idx=0, fingerprint=store_id)
+        db.insert('stores', idx=0, id=store_id)
 
         spurt('.filoco.tmp/store_cert', crypto.dump_certificate(crypto.FILETYPE_PEM, cert).decode('ascii'))
         with open('.filoco.tmp/store_key', 'wb') as file:

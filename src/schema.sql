@@ -39,7 +39,7 @@ create table links (
 -- Index 0 is always the local repo!
 create table stores (
     idx integer primary key,
-    fingerprint text unique
+    id text unique
 );
 
 ---- SYNCHRONIZED METADATA ----
@@ -55,8 +55,7 @@ create table syncables (
     tree_key integer,
 #endif
     id text unique,
-    kind text,
-    sig blob -- RSA signature of origin repo
+    kind text
 );
 
 #if sync_mode == 'serial'
@@ -65,8 +64,8 @@ create unique index syncables_origin_serial on syncables (
 );
 create view syncables_local as select * from syncables where origin_idx=0;
 create trigger syncables_local_insert instead of insert on syncables_local begin
-    insert into syncables (origin_idx, serial, id, kind, sig)
-        values (0, coalesce(new.serial, (select max(serial) from syncables_local)+1, 1), new.id, new.kind, new.sig);
+    insert into syncables (origin_idx, serial, id, kind)
+        values (0, coalesce(new.serial, (select max(serial) from syncables_local)+1, 1), new.id, new.kind);
 end;
 #endif
 

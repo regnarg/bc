@@ -13,6 +13,10 @@ init_debug(['synctree', 'sendobj'])
 PROTOCOL = 1
 
 class Protocol:
+    SIZE_FMT = '>L'
+    SIZE_BYTES = struct.calcsize(SIZE_FMT)
+    xchg_timeout = 10
+
     def __init__(self, file):
         if isinstance(file, tuple):
             self.in_file, self.out_file = file
@@ -20,24 +24,24 @@ class Protocol:
             self.in_file = self.out_file = file
         self.did_hello = False
 
-    def write_sized(self, data):
+    def send_sized(self, data):
         self.out_stream.write(struct.pack(self.SIZE_FMT, len(data)))
         self.out_stream.write(data)
 
-    def write_cbor(self, obj):
+    def send_cbor(self, obj):
         # XXX we prefix each CBOR object with a size because the `cbor' module
         # does not support incremental (push) decoding and we would not know
         # how much data to read on the receiving end. This is redundant but
         # apart from rewriting the cbor module and ugly hacks, not much can be
         # done.
-        self.write_sized(cbor.dumps(obj))
+        self.send_sized(cbor.dumps(obj))
 
-    async def read_sized(self):
+    async def recv_sized(self):
         size = struct.unpack(self.SIZE_FMT, await self.in_stream.readexactly(self.SIZE_BYTES))[0]
         return await self.in_stream.readexactly(size)
 
-    async def read_cbor(self):
-        body = await self.read_sized()
+    async def recv_cbor(self):
+        body = await self.recv_sized()
         return cbor.loads(body)
 
     async def send_multi(self, msgs):
@@ -101,8 +105,66 @@ class Protocol:
         self.out_stream = await aio_write_pipe(self.out_file)
 
 class MDSync(Protocol):
-    SIZE_FMT = '>L'
-    SIZE_BYTES = struct.calcsize(SIZE_FMT)
+    def __new__(cls, store, *a, **kw):
+        if cls is MDSync:
+            # Automatically create instance of the right subclass for store's sync mode
+            if store.sync_mode == 'synctree':
+                return super().__new__(TreeMDSync)
+            else:
+                return super().__new__(SerialMDSync)
+        else:
+            return super().__new__(cls)
+
+    def __init__(self, store, file):
+        super().__init__(file=file)
+        self.store = store
+        self.db = store.db
+        self.store_id2idx = {}
+        self.store_idx2id = {}
+        for store in list(self.db.query('select * from stores')):
+            self.store_id2idx[store.id] = store.idx
+            self.store_idx2id[store.idx] = store.id
+
+    async def send_by_syncable_row(self, row):
+        kind = row['kind']
+        tbl = Store.TYPE2TABLE[kind]
+        obj = self.db.query_first('select * from %s where id=?'%tbl, row['id'])
+        to_send = {'kind': kind, 'origin': self.store_idx2id[row['origin_idx']], 'data': obj, 'id': row['id']}
+        del obj['id']
+        if self.store.sync_mode == 'serial':
+            to_send['serial'] = row['serial']
+        if D_SENDOBJ:
+            log.debug('sending object %s', json.dumps(to_send))
+        self.send_cbor(to_send)
+        await self.out_stream.drain()
+
+    async def recv_objects(self):
+        while True:
+            for i in range(1000):
+                # XXX this transacton affects the concurrent send task! is it a problem?
+                with self.db:
+                    data = await self.recv_sized()
+                    if not data: break
+                    obj = cbor.loads(data)
+                    kw = dict(obj['data'])
+                    if self.store.sync_mode == 'serial':
+                        kw['serial'] = obj['serial']
+                    self.store.add_syncable(obj['id'], obj['kind'], origin=obj['origin'], **kw)
+            if not data: break
+
+    async def exchange_objects(self, to_send):
+        send_task = asyncio.ensure_future(self.send_objects(to_send))
+        recv_task = asyncio.ensure_future(self.recv_objects())
+        done, pending = await asyncio.wait([send_task, recv_task],
+                                return_when=asyncio.FIRST_EXCEPTION)
+        return [ x.result() for x in done ]
+
+    async def run(self):
+        await self.prepare()
+        to_send = await self.compute_diff()
+        await self.exchange_objects(to_send)
+
+class TreeMDSync(MDSync):
     # TODO: make parameters configurable per-world (all stores in a world must
     # have same configuration)
     # Start at some reasonable level so as not to send only a few bytes in the
@@ -113,11 +175,8 @@ class MDSync(Protocol):
     START_LVL = 4
     NODE_FMT = '>Q16s16s' # a 64b position and two 128b xors
     NODE_BYTES = struct.calcsize(NODE_FMT)
-    xchg_timeout = 10
     def __init__(self, store, file):
-        super().__init__(file=file)
-        self.store = store
-        self.db = store.db
+        super().__init__(store=store, file=file)
         self.synctree = store.synctree
 
     def get_xors(self, positions):
@@ -137,7 +196,7 @@ class MDSync(Protocol):
     async def recv_level(self):
         if self.recv_tree_eof: return {}
         ret = {}
-        data = await self.read_sized()
+        data = await self.recv_sized()
         if data == b'':
             if D_SYNCTREE: log.debug('Received EOF')
             self.recv_tree_eof = True
@@ -149,7 +208,7 @@ class MDSync(Protocol):
         return ret
 
 
-    async def do_synctree(self): 
+    async def compute_diff(self): 
         self.recv_tree_eof = False
         lvl_num = self.START_LVL
         start_off = start_size = 1 << self.START_LVL
@@ -203,16 +262,9 @@ class MDSync(Protocol):
             logging.debug('Send objects: %r', send_objects)
         return send_subtrees, send_objects
 
-    async def send_by_syncable_row(self, row):
-        type = row['kind']
-        tbl = Store.TYPE2TABLE[type]
-        obj = self.db.query_first('select * from %s where id=?'%tbl, row['id'])
-        if D_SENDOBJ:
-            log.debug('sending object %s', json.dumps((type, obj)))
-        self.write_cbor((type, obj))
-        await self.out_stream.drain()
 
-    async def send_objects(self, send_subtrees, send_objects):
+    async def send_objects(self, what):
+        send_subtrees, send_objects = what
         rows = []
         for oid in send_objects:
             rows.append(self.db.query_first("select insert_order, id, kind from syncables where id=?", oid))
@@ -225,33 +277,39 @@ class MDSync(Protocol):
         rows.sort(key=lambda row: row['insert_order'])
         for row in rows:
             await self.send_by_syncable_row(row)
-        self.write_sized(b'')
+        self.send_sized(b'')
+        await self.out_stream.drain()
+
+class SerialMDSync(MDSync):
+    async def compute_diff(self):
+        local_maxsers = {}
+        id2idx = {}
+        for store in list(self.db.query('select * from stores')):
+            max_serial = self.db.query_first('select max(serial) from syncables where origin_idx=?', store.idx, _assoc=False)[0]
+            if max_serial is None or max_serial <= 0: continue
+            local_maxsers[store.id] = max_serial
+            id2idx[store.id] = store.idx
+        log.debug('local_maxsers: %r', local_maxsers)
+        (remote_maxsers,) = await self.exchange([('cbor', local_maxsers)], ['cbor'])
+        log.debug('remote_maxsers: %r', remote_maxsers)
+        to_send = []
+        for origin_id, local_maxser in local_maxsers.items():
+            remote_maxser = remote_maxsers.get(origin_id, -1)
+            if local_maxser > remote_maxser:
+                to_send.append((id2idx[origin_id], origin_id, remote_maxser + 1))
+        log.debug('to_send: %r', to_send)
+        return to_send
+
+    async def send_objects(self, to_send):
+        for origin_idx, origin_id, start in to_send:
+            log.debug('Sending origin %s(%d), start %d', origin_id, origin_idx, start)
+            for row in self.db.query("select * from syncables where origin_idx=? and serial>=? order by serial asc",
+                                        origin_idx, start):
+                await self.send_by_syncable_row(row)
+        self.send_sized(b'')
         await self.out_stream.drain()
 
 
-    async def recv_objects(self):
-        while True:
-            for i in range(1000):
-                # XXX this transacton affects the concurrent sebd task! is it a problem?
-                with self.db:
-                    data = await self.read_sized()
-                    if not data: break
-                    kind, attrs = cbor.loads(data)
-                    id = attrs.pop('id')
-                    self.store.add_syncable(id, kind, **attrs)
-            if not data: break
-
-    async def exchange_objects(self, send_subtrees, send_objects):
-        send_task = asyncio.ensure_future(self.send_objects(send_subtrees, send_objects))
-        recv_task = asyncio.ensure_future(self.recv_objects())
-        done, pending = await asyncio.wait([send_task, recv_task],
-                                return_when=asyncio.ALL_COMPLETED)
-        return [ x.result() for x in done ]
-
-    async def run(self):
-        await self.prepare()
-        send_subtrees, send_objects = await self.do_synctree()
-        await self.exchange_objects(send_subtrees, send_objects)
 
 def main(args):
     # .buffer is for binary stdio
