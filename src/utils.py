@@ -224,19 +224,6 @@ def is_mountpoint(path):
     finally:
         if close: os.close(fd)
 
-def handle_to_str(fh):
-    """Return a string representation of a file handle."""
-    return "%d:%s" % (fh.type, binascii.hexlify(fh.handle).decode())
-def str_to_handle(s):
-    """Convert a string representation to a butter-compatible FileHandle object."""
-    try:
-        tp, data = s.split(':', 1)
-        tp = int(tp)
-        data = binascii.unhexlify(data)
-    except ValueError:
-        raise ValueError("invalid handle: '%s'" % s)
-    return FileHandle(tp, data)
-
 def issubpath(descendant, ancestor):
     """Check whether one path is an (indirect) descendant of another.
 

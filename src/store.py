@@ -206,7 +206,7 @@ class Store:
         self.db.connection.loadextension(str(FILOCO_LIBDIR / 'binxor.so'))
 
     def open_handle(self, handle, flags):
-        return FD(open_by_handle_at(self.root_fd, str_to_handle(handle), flags))
+        return FD(open_by_handle_at(self.root_fd, handle, flags))
 
     def handle_exists(self, handle):
         try:

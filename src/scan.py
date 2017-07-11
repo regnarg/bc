@@ -43,7 +43,7 @@ class InodeInfo:
     @classmethod
     def from_db(cls, store, row):
         """Create an InodeInfo from a row in the `inodes` table."""
-        return cls(store, handle=row.handle, ino=row.ino, type=row.type, iid=row.iid)
+        return cls(store, handle=FileHandle(row.handle_type, row.handle), ino=row.ino, type=row.type, iid=row.iid)
 
     def release_fd(self):
         """Convert self.fd into a weakref so that we do not keep the FD open too long."""
@@ -73,7 +73,7 @@ class InodeInfo:
         if self.handle:
             return self.handle
         elif self.fd:
-            self.handle = handle_to_str(name_to_handle_at(self.fd.fd, "", AT_EMPTY_PATH)[0])
+            self.handle = name_to_handle_at(self.fd.fd, "", AT_EMPTY_PATH)[0]
             return self.handle
         else:
             raise NotImplementedError # TODO: lookup from db?
@@ -200,7 +200,8 @@ class Scanner:
         with self.db.ensure_transaction():
             obj = self.db.query_first('select * from inodes where ino=?', ino)
             if obj is not None:
-                if obj.handle == handle or self.store.handle_exists(obj.handle):
+                obj_handle = FileHandle(obj.handle_type, obj.handle)
+                if obj_handle == handle or self.store.handle_exists(obj_handle):
                     info.iid = obj['iid']
                     return obj
                 else:
@@ -213,7 +214,7 @@ class Scanner:
                 st = info.get_stat()
                 # We can insert safely without any locking. Because we hold an open FD to
                 # the inode, it cannot just disappear and thus we are writing correct data.
-                self.db.insert('inodes', ino=ino, handle=handle, iid=iid, type=ftype,
+                self.db.insert('inodes', ino=ino, handle_type=handle[0], handle=handle[1], iid=iid, type=ftype,
                                 size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime,
                                 scan_state=(SCAN_NEVER_SCANNED if ftype=='d' else SCAN_UP_TO_DATE))
                 #self.db.insert('fslog', event=EVENT_CREATE, iid=iid)

@@ -2,7 +2,8 @@
 
 create table inodes (
     ino integer primary key on conflict replace,
-    handle text unique,
+    handle_type integer,
+    handle blob,
     iid text unique,
     type text, -- 'r', 'd', 'l', etc.
     scan_state integer default 0,
@@ -13,7 +14,9 @@ create table inodes (
 );
 
 -- including 'ino' in the index helps sorting
-create index inodes_type on inodes (type, scan_state, ino);
+create index inodes_type_state on inodes (type, scan_state, ino);
+create index inodes_state on inodes (scan_state, ino);
+create unique index inodes_handle on inodes (handle_type, handle);
 
 create table links (
     parent integer references inodes(ino) on delete cascade,
