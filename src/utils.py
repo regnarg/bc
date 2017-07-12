@@ -239,9 +239,10 @@ def slurp(path, *, dir_fd=None):
     """Return the whole content of a file as a string.
     
     Inspired by a namesake function in Perl 6."""
-    with openat(path, 'r', dir_fd=dir_fd) as file: return file.read()
+    with openat(str(path), 'r', dir_fd=dir_fd) as file: return file.read()
 def spurt(path, content, *, dir_fd=None):
     """Atomically overwrite `path` with given content."""
+    path = str(path)
     with openat(path+'.tmp', 'w', dir_fd=dir_fd) as file: file.write(content)
     os.rename(path+'.tmp', path, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
 

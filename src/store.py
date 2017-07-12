@@ -9,6 +9,8 @@ SQLite database.
 import sys, os
 from utils import *
 from butter.fhandle import *
+from pathlib import Path
+import json, hashlib
 
 ## class PerPartesTransactionManager:
 ##     """A class that splits a long-running transaction into several smaller ones.
@@ -138,22 +140,23 @@ class Store:
     root_fd = None
     meta_fd = None
     SQLITE_CACHE_MB = 256
-    TYPE2TABLE = {'fob': 'fobs', 'fov': 'fovs'}
+    TYPE2TABLE = {'fob': 'fobs', 'fcv': 'fcvs', 'flv': 'flvs'}
 
     def __init__(self, root):
         if isinstance(root, int):
             root = FD(root)
         if isinstance(root, FD): # fall thru
             self.root_fd = root
-            self.root_path = frealpath(self.root_fd)
+            self.root_path = Path(frealpath(self.root_fd))
         else:
-            self.root_path = os.path.realpath(root)
+            self.root_path = Path(os.path.realpath(root))
             self.root_fd = FD.open(self.root_path, os.O_DIRECTORY)
         self.root_mnt = name_to_handle_at(self.root_fd, "", AT_EMPTY_PATH)[1]
-        self.meta_path = os.path.join(self.root_path, META_DIR)
+        self.meta_path = self.root_path / META_DIR
         self.meta_fd = FD.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
+        self.store_id = slurp(self.meta_path / 'store_id')
+        self.sync_mode = slurp(self.meta_path / 'sync_mode')
         self.open_db()
-        self.sync_mode = slurp(os.path.join(self.meta_path, 'sync_mode'))
         if self.sync_mode == 'synctree':
             self.synctree = SyncTree(self.db)
             #self.synctree.create_trigger()
@@ -192,7 +195,16 @@ class Store:
         finally:
             if dfd is not None: os.close(dfd)
 
+    def compute_object_id(self, kind, origin=None, **data):
+        data = dict(data)
+        data['kind'] = kind
+        data['origin'] = (origin or self.store_id).lower()
+        return hashlib.sha256(json.dumps(data, sort_keys=True).encode('utf-8')).hexdigest()[:32]
+
     def add_syncable(self, id, kind, origin=None, serial=None, **data):
+        if id is None:
+            if kind == 'fob': id = gen_uuid()
+            else: id = self.compute_object_id(kind, origin, **data)
         if origin is None: origin_idx = 0
         else: origin_idx = self.get_store_idx(origin)
 
@@ -206,6 +218,7 @@ class Store:
                 self.db.execute('insert into syncables (id, kind, origin_idx, serial) values (?, ?, ?, ?)',
                                     id, kind, origin_idx, serial)
         self.db.insert(self.TYPE2TABLE[kind], id=id, **data)
+        return id
 
     def open_db(self):
         self.db = SqliteWrapper('/proc/self/fd/%d/meta.sqlite' % self.meta_fd, wal=True)
@@ -213,8 +226,9 @@ class Store:
         self.db.execute('PRAGMA wal_autocheckpoint=20000')
         # https://www.sqlite.org/pragma.html#pragma_cache_size
         self.db.execute('PRAGMA cache_size=%d' % (- self.SQLITE_CACHE_MB*1024))
-        self.db.connection.enableloadextension(True)
-        self.db.connection.loadextension(str(FILOCO_LIBDIR / 'binxor.so'))
+        if self.sync_mode == 'synctree':
+            self.db.connection.enableloadextension(True)
+            self.db.connection.loadextension(str(FILOCO_LIBDIR / 'binxor.so'))
 
     def open_handle(self, handle, flags):
         return FD(open_by_handle_at(self.root_fd, handle, flags))
@@ -229,8 +243,10 @@ class Store:
             return True
 
     def create_fob(self, *, type, name=None, parent=None):
-        id = gen_uuid()
-        self.add_syncable(id, 'fob')
+        fob_id = self.add_syncable(None, 'fob')
+        flv_id = self.add_syncable(None, 'flv', parent_fob=parent, name=name, parent_vers='', fob=fob_id)
+        fcv_id = self.add_syncable(None, 'fcv', content_hash=None, parent_vers='', fob=fob_id)
+        return fob_id, flv_id, fcv_id
 
     def get_store_idx(self, id):
         try: return self.store_idx_cache[id]

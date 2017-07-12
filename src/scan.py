@@ -333,10 +333,10 @@ class Scanner:
                 # TODO schedule delayed rescan (exp. backoff ideally)
 
     def on_link(self, parent_info, parent_obj, name, info, obj, old_obj=None):
-        if not obj.oid and info.type in ('d', 'r'):
+        if not obj.fob and info.type in ('d', 'r'):
             with self.db.ensure_transaction():
-                oid = self.store.create_fob(type=info.type, name=name, parent=parent_obj.oid)
-                self.db.update('inodes', 'iid=?', obj.iid, oid=oid)
+                fob_id, flv_id, fcv_id = self.store.create_fob(type=info.type, name=name, parent=parent_obj.fob)
+                self.db.update('inodes', 'iid=?', obj.iid, fob=fob_id, fcv=fcv_id, flv=flv_id)
 
     def delete_inode(self, info):
         log.debug('Deleting inode %r from database', info)

@@ -10,7 +10,9 @@ create table inodes (
     size integer,
     mtime integer,
     ctime integer,
-    oid integer references obects(oid)
+    fob text references fobs(id),
+    flv text references flvs(id),
+    fcv text references fcvs(id)
 );
 
 -- including 'ino' in the index helps sorting
@@ -91,13 +93,13 @@ create table flvs (
     fob text references fobs(id),
     parent_fob text references fobs(id),
     name text,
-    parent_versions text
+    parent_vers text
 );
 create table fcvs (
     id text unique references syncables(id),
     fob text references fobs(id),
     content_hash text,
-    parent_versions text
+    parent_vers text
 );
 create table srs (
     id text unique references syncables(id),

@@ -59,7 +59,7 @@ def main(dir = '.', synctree=False, n=None):
         cert.set_pubkey(key)
         cert.sign(key, 'sha256')
 
-        store_id = cert.digest('sha256').decode('ascii').replace(':','')
+        store_id = cert.digest('sha256').decode('ascii').replace(':','').lower()
         spurt('.filoco.tmp/store_id', store_id)
 
         db.insert('stores', idx=0, id=store_id)
