@@ -366,7 +366,6 @@ try:
 except ImportError:
     pass
 
-
 # Based on https://gist.github.com/nathan-hoad/8966377
 async def aio_read_pipe(file):
     loop = asyncio.get_event_loop()
@@ -381,3 +380,95 @@ async def aio_write_pipe(file):
     writer_transport, writer_protocol = await loop.connect_write_pipe(FlowControlMixin, file)
     writer = StreamWriter(writer_transport, writer_protocol, None, loop)
     return writer
+
+class Protocol:
+    SIZE_FMT = '>L'
+    SIZE_BYTES = struct.calcsize(SIZE_FMT)
+    xchg_timeout = 10
+
+    def __init__(self, file):
+        if isinstance(file, tuple):
+            self.in_file, self.out_file = file
+        else:
+            self.in_file = self.out_file = file
+        self.did_hello = False
+
+    def send_sized(self, data):
+        self.out_stream.write(struct.pack(self.SIZE_FMT, len(data)))
+        self.out_stream.write(data)
+
+    def send_cbor(self, obj):
+        # XXX we prefix each CBOR object with a size because the `cbor' module
+        # does not support incremental (push) decoding and we would not know
+        # how much data to read on the receiving end. This is redundant but
+        # apart from rewriting the cbor module and ugly hacks, not much can be
+        # done.
+        self.send_sized(cbor.dumps(obj))
+
+    async def recv_sized(self):
+        size = struct.unpack(self.SIZE_FMT, await self.in_stream.readexactly(self.SIZE_BYTES))[0]
+        return await self.in_stream.readexactly(size)
+
+    async def recv_cbor(self):
+        body = await self.recv_sized()
+        return cbor.loads(body)
+
+    async def send_multi(self, msgs):
+        for msg in msgs: self.send(msg)
+        await self.out_stream.drain()
+
+    async def recv_multi(self, types):
+        r = []
+        for type in types:
+            r.append(await self.recv(type))
+        return r
+
+    def _dispatch(self, prefix, what):
+        if isinstance(what, tuple):
+            tp = what[0]
+            args = what[1:]
+        elif isinstance(what, str):
+            tp = what
+            args = ()
+        else:
+            raise TypeError
+        return getattr(self, prefix+tp)(*args)
+
+    def send(self, what):
+        return self._dispatch('send_', what)
+    async def recv(self, what):
+        return await self._dispatch('recv_', what)
+
+    def send_hello(self):
+        pass
+    async def recv_hello(self):
+        pass
+
+    async def exchange(self, send_objects, to_recv):
+        if not self.did_hello:
+            send_objects = ['hello'] + send_objects
+            to_recv = ['hello'] + to_recv
+        send_task = asyncio.ensure_future(self.send_multi(send_objects))
+        recv_task = asyncio.ensure_future(self.recv_multi(to_recv))
+        done, pending = await asyncio.wait([send_task, recv_task],
+                                timeout=self.xchg_timeout,
+                                return_when=asyncio.FIRST_EXCEPTION)
+
+        if pending: # error or timeout
+            for fut in pending:
+                fut.cancel()
+        for fut in done: fut.result() # if there was an exception, raise it
+        if pending: raise asyncio.TimeoutError("Timeout while doing protocol exchange")
+
+        ret = recv_task.result()
+        if not self.did_hello:
+            remote_hello = ret.pop(0)
+            self.process_hello(remote_hello)
+        return ret
+
+    def process_hello(self, remote_hello):
+        pass
+
+    async def prepare(self):
+        self.in_stream = await aio_read_pipe(self.in_file)
+        self.out_stream = await aio_write_pipe(self.out_file)
