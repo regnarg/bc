@@ -144,6 +144,7 @@ int main(int argc, char **argv) {
 
     // printf("done\n");
     // getc(stdin);
+    fprintf(stderr, "%s: info: done\n", argv[0]);
 
     sqlite3_finalize(stmt);
     sqlite3_close(db);

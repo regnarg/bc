@@ -381,6 +381,8 @@ async def aio_write_pipe(file):
     writer = StreamWriter(writer_transport, writer_protocol, None, loop)
     return writer
 
+import struct
+import cbor
 class Protocol:
     SIZE_FMT = '>L'
     SIZE_BYTES = struct.calcsize(SIZE_FMT)

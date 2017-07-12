@@ -210,10 +210,17 @@ class SerialMDSync(MDSync):
         return to_send
 
     async def send_objects(self, to_send):
-        for origin_idx, origin_id, start in to_send:
-            log.debug('Sending origin %s(%d), start %d', origin_id, origin_idx, start)
-            for row in self.db.query("select * from syncables where origin_idx=? and serial>=? order by serial asc",
-                                        origin_idx, start):
+        #for origin_idx, origin_id, start in to_send:
+        #    log.debug('Sending origin %s(%d), start %d', origin_id, origin_idx, start)
+        #    for row in self.db.query("select * from syncables where origin_idx=? and serial>=? order by serial asc",
+        #                                origin_idx, start):
+        #        await self.send_by_syncable_row(row)
+        if to_send:
+            origin_conds = " or ".join(  "(origin_idx=%d and serial>=%d)"%(origin_idx, start)
+                                         for (origin_idx, origin_id, start) in to_send  )
+            # Send in local insertion order to guarantee referential correctness of inserts on target.
+            query = "select * from syncables where %s order by insert_order asc" % origin_conds
+            for row in self.db.query(query):
                 await self.send_by_syncable_row(row)
         self.send_sized(b'')
         await self.out_stream.drain()

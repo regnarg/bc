@@ -45,9 +45,8 @@ create table stores (
 ---- SYNCHRONIZED METADATA ----
 
 create table syncables (
-#if sync_mode == 'synctree'
     insert_order integer primary key autoincrement,
-#else
+#if sync_mode == 'serial'
     serial integer,
 #endif
     origin_idx integer default 0 references stores(idx),
@@ -87,10 +86,23 @@ create table fobs (
     type text
 );
 
-create table fovs (
+create table flvs (
     id text unique references syncables(id),
     fob text references fobs(id),
+    parent_fob text references fobs(id),
+    name text,
     parent_versions text
+);
+create table fcvs (
+    id text unique references syncables(id),
+    fob text references fobs(id),
+    content_hash text,
+    parent_versions text
+);
+create table srs (
+    id text unique references syncables(id),
+    fcv text,
+    state integer
 );
 
 
