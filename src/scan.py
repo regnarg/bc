@@ -123,8 +123,14 @@ class Scanner:
     #       Either fix or add some kind of locking.
     FANOTIFY_MASK = FAN_CLOSE_WRITE | FAN_MODIFY_DIR | FAN_ONDIR # FAN_OPEN
     SCAN_QUEUE_SIZE = 0 # TODO: do we want to limit this?
-    QUEUE_MAX_FDS = 1_000
+    QUEUE_MAX_FDS = 1000
     FANOTIFY_INTERVAL = 5
+    # How many seconds to wait before creating a FOB for a new inode. This is necessary
+    # to handle the copy-and-rewrite idiom. If the temporary copy replaces an existing
+    # FOB within this timeframe, it will be considered a new version of that FOB instead
+    # of creating a new FOB.
+    FOB_CREATE_WAIT = 30
+
     def __init__(self, dir, *, watch_mode='none', init_scan=None, recursive=False):
         #if not is_mountpoint(dir):
         #    err("Watched directory '%s' must be a mountpoint."
@@ -143,12 +149,12 @@ class Scanner:
         self.init_scan = init_scan
         self.recursive = recursive
         self.scan_task = None
+        self.from_notify = False
         if self.start_path != Path() and not self.recursive:
             raise ValueError("Scanning a specific subtree is only supported with -r")
 
     def on_fanotify_event(self, event):
         fd = FD(event.fd)
-        close = True
         log.debug("Got fanotify event: %r", event)
         if issubpath(event.filename, self.store.meta_path):
             log.debug("Event on meta file %s. Ignoring.", event.filename)
@@ -162,8 +168,11 @@ class Scanner:
             # tree. This is inefficient but the best we can do.
             return
         if event.mask & FAN_MODIFY_DIR:
-            self.scan(event.fd) # scan closes fd
-            close = False
+            self.from_notify = True
+            try:
+                self.scan(fd)
+            finally:
+                self.from_notify = False
 
     def on_fanotify_readable(self):
         for event in self.fan.read_events():
@@ -219,6 +228,7 @@ class Scanner:
                 # the inode, it cannot just disappear and thus we are writing correct data.
                 self.db.insert('inodes', ino=ino, handle_type=handle[0], handle=handle[1], iid=iid, type=ftype,
                                 size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime,
+                                btime=st.st_mtime, # btime currently not available b/c of missing statx userspace wrapper
                                 scan_state=(SCAN_NEVER_SCANNED if ftype=='d' else SCAN_UP_TO_DATE))
                 #self.db.insert('fslog', event=EVENT_CREATE, iid=iid)
                 if ftype == 'd':
@@ -262,17 +272,25 @@ class Scanner:
             # in cache.
             self.scan(info, fresh_stat=True)
 
-    def scan(self, info, *, fresh_stat=False, recursive=False):
-        info.get_stat(force=not fresh_stat)
+    def scan(self, info, *, obj=None, create=False, fresh_stat=False, recursive=False):
+        if obj is None:
+            obj = self.find_inode(info, create=create)
+            if obj is None: return
+        try:
+            info.get_stat(force=not fresh_stat)
+        except (FileNotFoundError, StaleHandle):
+            self.db.execute('delete from inodes where iid=?', obj.iid)
+            return
         if info.type == 'd':
-            self.scan_dir(info, fresh_stat=True, recursive=recursive)
+            self.scan_dir(info, dirobj=obj, fresh_stat=True, recursive=recursive)
 
-    def scan_dir(self, dirinfo, *, fresh_stat=False, recursive=False):
+    def scan_dir(self, dirinfo, *, dirobj=None, fresh_stat=False, recursive=False):
         if D_SCAN: log.debug("Scanning %r", dirinfo)
         seen  = set()
         st_start = dirinfo.get_stat(force=not fresh_stat)
-        try: dirobj = self.find_inode(dirinfo)
-        except CrossMount: return
+        if dirobj is None:
+            try: dirobj = self.find_inode(dirinfo)
+            except CrossMount: return
         assert dirobj.type == 'd'
         assert dirinfo.iid
         with self.db.ensure_transaction():
@@ -304,13 +322,13 @@ class Scanner:
                         self.db.update('links', 'parent=? and name=?',
                                 dirobj.ino, entry.name, ino=obj.ino)
                     else:
-                        if D_MDUPDATE:
-                            log.debug("Linking %s into %s", frealpath(fd),
-                                frealpath(dirinfo.fd))
                         self.db.insert('links', ino=obj.ino, parent=dirobj.ino,
                                     name=entry.name)
-                        self.on_link(dirinfo, dirobj, entry.name, info, obj, old_obj)
-                        #self.db.insert('fslog', event=EVENT_LINK, iid=obj.iid, parent_iid=dirobj.iid,
+                    if D_MDUPDATE:
+                        log.debug("Linking %s into %s", frealpath(fd),
+                            frealpath(dirinfo.fd))
+                    self.on_link(dirinfo, dirobj, entry.name, info, obj, old_obj)
+                    #self.db.insert('fslog', event=EVENT_LINK, iid=obj.iid, parent_iid=dirobj.iid,
                         #                        name=entry.name)
                 if recursive and stat.S_ISDIR(info.stat.st_mode):
                     self.push_scan(SR_SCAN_RECURSIVE, info)
@@ -334,10 +352,49 @@ class Scanner:
                 # TODO schedule delayed rescan (exp. backoff ideally)
 
     def on_link(self, parent_info, parent_obj, name, info, obj, old_obj=None):
+        # To create a FLV, we need parent FOB. But it may happen because of race conditions
+        # that we got linked to parent before parent got a FOB assigned. In that case,
+        # on_link_to_fob will be called later when we assign FOB to parent.
+        if info.type == 'r' and old_obj and old_obj.type == 'r' and old_obj.fob and not obj.fob:
+            if D_MDUPDATE: log.debug("Detected replacement: fob (%s, %s, %s), inode %d(%s) -> %d(%s)",
+                                    old_obj.fob, old_obj.flv, old_obj.fcv, old_obj.ino, old_obj.iid, obj.ino, obj.iid)
+            self.assign_fob(info, obj, fob_id=old_obj.fob, flv_id=old_obj.flv,
+                            fcv_id=self.store.create_working_version(old_obj.fob, old_obj.fcv))
+        if parent_obj.fob or parent_obj.iid == 'ROOT':
+            self.on_link_to_fob(parent_info, parent_obj, name, info, obj, old_obj)
+
+
+    def assign_fob(self, info, obj, fob_id, flv_id, fcv_id, replace=True):
+        """Pair an inode with an existing FOB, FLV and FCV. FCV can be null for directories and placeholders."""
+        with self.db.ensure_transaction():
+            if not replace and self.db.query_first('select 1 from inodes where iid=? and fob is not null', obj.iid):
+                return
+            if D_MDUPDATE: log.debug("Assigning inode %s to FOB (%s, %s, %s)", obj.iid, fob_id, flv_id, fcv_id)
+            self.db.update('inodes', 'iid=?', obj.iid, fob=fob_id, fcv=fcv_id, flv=flv_id)
+            obj.fob = fob_id
+            obj.flv = flv_id
+            obj.fcv = fcv_id
+            if obj.type == 'd':
+                for link in self.db.query('select * from links l join inodes i on l.ino=i.ino where l.parent=? and i.fob is null',  obj.ino):
+                    child_obj = self.db.query_first('select * from inodes where ino=?', link.ino)
+                    if not child_obj: continue
+                    child_info = InodeInfo.from_db(child_obj)
+                    self.on_link_to_fob(info, obj, link.name, child_info, child_obj)
+
+    def create_fob(self, parent_fob, name, info, obj, replace=True):
+        with self.db.ensure_transaction():
+            if not replace and self.db.query_first('select 1 from inodes where iid=? and fob is not null', obj.iid):
+                return
+            fob_id, flv_id, fcv_id = self.store.create_fob(type=info.type, name=name, parent=parent_fob)
+            self.assign_fob(info, obj, fob_id, flv_id, fcv_id)
+
+    def on_link_to_fob(self, parent_info, parent_obj, name, info, obj, old_obj=None):
+        assert parent_obj.fob or parent_obj.iid == 'ROOT'
         if not obj.fob and info.type in ('d', 'r'):
-            with self.db.ensure_transaction():
-                fob_id, flv_id, fcv_id = self.store.create_fob(type=info.type, name=name, parent=parent_obj.fob)
-                self.db.update('inodes', 'iid=?', obj.iid, fob=fob_id, fcv=fcv_id, flv=flv_id)
+            # TODO: from_notify delay
+            if self.from_notify and time.time() - obj.btime < self.FOB_CREATE_WAIT:
+                pass
+            self.create_fob(parent_obj.fob, name, info, obj)
 
     def delete_inode(self, info):
         log.debug('Deleting inode %r from database', info)

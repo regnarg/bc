@@ -221,8 +221,9 @@ class Store:
 
     def add_syncable(self, id, kind, origin=None, serial=None, **data):
         if id is None:
-            if kind == 'fob': id = gen_uuid()
-            else: id = self.compute_object_id(kind, origin, **data)
+            #if kind == 'fob': id = gen_uuid()
+            #else: id = self.compute_object_id(kind, origin, **data)
+            id = gen_uuid()
         if origin is None: origin_idx = 0
         else: origin_idx = self.get_store_idx(origin)
 
@@ -261,10 +262,25 @@ class Store:
             return True
 
     def create_fob(self, *, type, name=None, parent=None):
-        fob_id = self.add_syncable(None, 'fob')
-        flv_id = self.add_syncable(None, 'flv', parent_fob=parent, name=name, parent_vers='', fob=fob_id)
-        fcv_id = self.add_syncable(None, 'fcv', content_hash=None, parent_vers='', fob=fob_id)
-        return fob_id, flv_id, fcv_id
+        with self.db.ensure_transaction():
+            fob_id = self.add_syncable(None, 'fob')
+            flv_id = self.add_syncable(None, 'flv', parent_fob=parent, name=name, parent_vers='', fob=fob_id)
+            if type == 'r':
+                fcv_id = self.create_working_version(fob_id, [])
+            else:
+                fcv_id = None
+            return fob_id, flv_id, fcv_id
+
+    def create_working_version(self, fob, parents):
+        if parents is None: parents = []
+        elif isinstance(parents, str): parents = [parents]
+        if len(parents) == 1:
+            # If the (single) parent is already a working verision, there is no need to create another.
+            parent = self.db.query_first('select s.origin_idx as origin_idx, v.content_hash as content_hash from fcvs v join syncables s on s.id=v.id where v.id=?', parents[0])
+            if parent.origin_idx == 0 and parent.content_hash is None:
+                return parents[0]
+        id = self.add_syncable(None, 'fcv', content_hash=None, parent_vers=','.join(parents), fob=fob)
+        return id
 
     def get_store_idx(self, id):
         try: return self.store_idx_cache[id]

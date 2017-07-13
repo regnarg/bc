@@ -13,6 +13,8 @@ from butter.fhandle import *
 import logging
 from pathlib import Path
 
+from clize import run, ArgumentError
+
 FILOCO_LIBDIR = Path(__file__).parent.resolve()
 
 log_prefix = os.environ.get('FILOCO_LOGPREFIX')
@@ -36,26 +38,6 @@ class AttrDict(dict):
         except KeyError: raise AttributeError(name)
     def __setattr__(self, name, val):
         self[name] = val
-def docopt_attr(doc, *a, **kw):
-    """A wrapper around `docopt` that returns a object with attributes
-    instead of a dictionary. Option names are automatically transformed
-    to valid python identifiers (e.g. `--output-file` to `output_file`).
-    
-    Is also replaces the script name with the real program name
-    (from sys.argv[0]) in the usage string."""
-
-    doc = doc.replace(os.path.basename(sys.modules['__main__'].__file__),
-                        sys.argv[0])
-
-    from docopt import docopt
-    dct = docopt(doc, *a, **kw)
-    ret = AttrDict()
-
-    for k,v in dct.items():
-        attr = k.lower().lstrip('-<').rstrip('>').replace('-', '_')
-        setattr(ret, attr, v)
-
-    return ret
 
 def err(msg, retcode=1):
     print("%s: error: %s" % (sys.argv[0], msg), file=sys.stderr)

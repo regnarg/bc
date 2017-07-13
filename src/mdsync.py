@@ -227,15 +227,13 @@ class SerialMDSync(MDSync):
 
 
 
-def main(args):
+def main(store):
     # .buffer is for binary stdio
-    st, sub = Store.find(args.store)
+    st, sub = Store.find(store)
+    if sub != Path(): raise ArgumentError("Metadata sync must be done on whole store (%s), not a subtree." % st.root_path)
     mdsync = MDSync(store=st, file=(sys.stdin.buffer, sys.stdout.buffer))
     asyncio.get_event_loop().run_until_complete(mdsync.run())
 
-import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument('store')
 
 if __name__ == '__main__':
-    main(parser.parse_args())
+    run(main)

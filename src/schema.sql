@@ -10,6 +10,7 @@ create table inodes (
     size integer,
     mtime integer,
     ctime integer,
+    btime integer, -- creation time (if available), otherwise discover time
     fob text references fobs(id),
     flv text references flvs(id),
     fcv text references fcvs(id)
@@ -19,13 +20,17 @@ create table inodes (
 create index inodes_type_state on inodes (type, scan_state, ino);
 create index inodes_state on inodes (scan_state, ino);
 create unique index inodes_handle on inodes (handle_type, handle);
+create index new_inodes on inodes (ino) where fob is null;
 
 create table links (
-    parent integer references inodes(ino) on delete cascade,
-    name text,
-    ino integer references inodes(ino) on delete cascade,
+    parent integer not null references inodes(ino) on delete cascade,
+    name text not null,
+    ino integer not null references inodes(ino) on delete cascade,
     unique (parent, name)
 );
+
+--create index links_by_location on links (parent, name);
+create index links_by_ino on links (ino);
 
 -- create table fslog (
 --     serial integer primary key,
@@ -41,7 +46,7 @@ create table links (
 -- Index 0 is always the local repo!
 create table stores (
     idx integer primary key,
-    id text unique
+    id text unique not null
 );
 
 ---- SYNCHRONIZED METADATA ----
@@ -49,14 +54,14 @@ create table stores (
 create table syncables (
     insert_order integer primary key autoincrement,
 #if sync_mode == 'serial'
-    serial integer,
+    serial integer not null,
 #endif
-    origin_idx integer default 0 references stores(idx),
+    origin_idx integer not null default 0 references stores(idx),
 #if sync_mode == 'synctree':
-    tree_key integer,
+    tree_key integer not null,
 #endif
-    id text unique,
-    kind text
+    id text unique not null,
+    kind text not null
 );
 
 #if sync_mode == 'serial'
@@ -84,20 +89,20 @@ create table synctree (
 # endif
 
 create table fobs (
-    id text unique references syncables(id),
+    id text unique not null references syncables(id),
     type text
 );
 
 create table flvs (
-    id text unique references syncables(id),
-    fob text references fobs(id),
+    id text unique not null references syncables(id),
+    fob text not null references fobs(id),
     parent_fob text references fobs(id),
     name text,
     parent_vers text
 );
 create table fcvs (
-    id text unique references syncables(id),
-    fob text references fobs(id),
+    id text unique not null references syncables(id),
+    fob text not null references fobs(id),
     content_hash text,
     parent_vers text
 );

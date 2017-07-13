@@ -1,14 +1,4 @@
 #!/usr/bin/python3
-"""
-Usage: init.py [--synctree] -n NAME [DIR]
-
-Create a new empty Filoco store in a given directory or the current working directory.
-
-Options:
-  -n NAME     Set repository name
-  --synctree  Use tree-based metadata synchronization (slower).
-              NOTE: All stores need to use the same sync method.
-"""
 
 import sys, os, tempfile, shutil
 import jinja2
@@ -28,7 +18,7 @@ for _loc in _schema_dirs:
 else:
     raise RuntimeError("Unable to find 'schema.sql' in %r" % _schema_dirs)
 
-def main(dir = '.', synctree=False, n=None):
+def main(dir, *, synctree=False, name:'n'=None):
     if dir: os.chdir(dir or '.')
     try: store, sub = Store.find()
     except StoreNotFound: pass
@@ -51,7 +41,7 @@ def main(dir = '.', synctree=False, n=None):
         pub_key = crypto.dump_publickey(crypto.FILETYPE_PEM, key)
 
         cert = crypto.X509()
-        cert.get_subject().CN = n
+        cert.get_subject().CN = name or 'unnamed'
         cert.set_serial_number(1000)
         cert.gmtime_adj_notBefore(0)
         cert.gmtime_adj_notAfter(10*365*24*60*60)
@@ -79,4 +69,4 @@ def main(dir = '.', synctree=False, n=None):
 
 
 if __name__ == '__main__':
-    main(**docopt_attr(__doc__))
+    run(main)
