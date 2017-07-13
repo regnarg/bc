@@ -390,11 +390,18 @@ class Scanner:
 
     def on_link_to_fob(self, parent_info, parent_obj, name, info, obj, old_obj=None):
         assert parent_obj.fob or parent_obj.iid == 'ROOT'
-        if not obj.fob and info.type in ('d', 'r'):
-            # TODO: from_notify delay
-            if self.from_notify and time.time() - obj.btime < self.FOB_CREATE_WAIT:
-                pass
-            self.create_fob(parent_obj.fob, name, info, obj)
+        with self.db.ensure_transaction():
+            if not obj.fob and info.type in ('d', 'r'):
+                # TODO: from_notify delay
+                if self.from_notify and time.time() - obj.btime < self.FOB_CREATE_WAIT:
+                    pass
+                self.create_fob(parent_obj.fob, name, info, obj)
+            elif obj.fob:
+                assert obj.flv
+                new_flv = self.store.create_flv(fob=obj.fob, parent_fob=parent_obj.fob,
+                                                name=name, parent_vers=obj.flv)
+                self.db.update('inodes', 'iid=?', obj.iid, flv=new_flv)
+                obj.flv = new_flv
 
     def delete_inode(self, info):
         log.debug('Deleting inode %r from database', info)

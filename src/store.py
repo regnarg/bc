@@ -271,15 +271,26 @@ class Store:
                 fcv_id = None
             return fob_id, flv_id, fcv_id
 
-    def create_working_version(self, fob, parents):
-        if parents is None: parents = []
-        elif isinstance(parents, str): parents = [parents]
-        if len(parents) == 1:
+    def create_working_version(self, fob, parent_vers):
+        if parent_vers is None: parent_vers = []
+        elif isinstance(parent_vers, str): parent_vers = [parent_vers]
+        if len(parent_vers) == 1:
             # If the (single) parent is already a working verision, there is no need to create another.
-            parent = self.db.query_first('select s.origin_idx as origin_idx, v.content_hash as content_hash from fcvs v join syncables s on s.id=v.id where v.id=?', parents[0])
+            parent = self.db.query_first('select s.origin_idx as origin_idx, v.content_hash as content_hash from fcvs v join syncables s on s.id=v.id where v.id=?', parent_vers[0])
             if parent.origin_idx == 0 and parent.content_hash is None:
-                return parents[0]
-        id = self.add_syncable(None, 'fcv', content_hash=None, parent_vers=','.join(parents), fob=fob)
+                return parent_vers[0]
+        id = self.add_syncable(None, 'fcv', content_hash=None, parent_vers=','.join(parent_vers), fob=fob)
+        return id
+
+    def create_flv(self, fob, parent_fob, name, parent_vers):
+        if parent_vers is None: parent_vers = []
+        elif isinstance(parent_vers, str): parent_vers = [parent_vers]
+        if len(parent_vers) == 1:
+            parent = self.db.query_first('select * from flvs where id=?', parent_vers[0])
+            if parent.parent_fob == parent_fob and parent.name == name:
+                return parent.id
+        id = self.add_syncable(None, 'flv', parent_vers=','.join(parent_vers),
+                                fob=fob, parent_fob=parent_fob, name=name)
         return id
 
     def get_store_idx(self, id):
