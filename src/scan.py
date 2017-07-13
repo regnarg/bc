@@ -283,6 +283,18 @@ class Scanner:
             return
         if info.type == 'd':
             self.scan_dir(info, dirobj=obj, fresh_stat=True, recursive=recursive)
+        else:
+            if info.type == 'r' and obj.fob:
+                with self.db.ensure_transaction():
+                    new_fcv = self.store.create_working_version(obj.fob, obj.fcv)
+                    self.db.update('inodes', 'iid=?', info.iid, fcv=new_fcv, scan_state=SCAN_UP_TO_DATE,
+                                size=info.stat.st_size, mtime=info.stat.st_mtime, ctime=info.stat.st_ctime)
+                    obj.fcv = new_fcv
+            else:
+                self.db.update('inodes', 'iid=?', info.iid, scan_state=SCAN_UP_TO_DATE,
+                                size=info.stat.st_size, mtime=info.stat.st_mtime, ctime=info.stat.st_ctime)
+
+            
 
     def scan_dir(self, dirinfo, *, dirobj=None, fresh_stat=False, recursive=False):
         if D_SCAN: log.debug("Scanning %r", dirinfo)
