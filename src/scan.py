@@ -129,7 +129,7 @@ class Scanner:
         #if not is_mountpoint(dir):
         #    err("Watched directory '%s' must be a mountpoint."
         #            " The -m option might help with that." % args.dir)
-        self.store = Store.find(dir or '.')
+        self.store, self.start_path = Store.find(dir or '.')
         self.db = self.store.db
         self.root_fd = self.store.root_fd
         self.scan_queue = asyncio.PriorityQueue(self.SCAN_QUEUE_SIZE)
@@ -143,6 +143,8 @@ class Scanner:
         self.init_scan = init_scan
         self.recursive = recursive
         self.scan_task = None
+        if self.start_path != Path() and not self.recursive:
+            raise ValueError("Scanning a specific subtree is only supported with -r")
 
     def on_fanotify_event(self, event):
         fd = FD(event.fd)
@@ -188,7 +190,6 @@ class Scanner:
 
     def do_delete_inode(self, iid):
         """Delete a given inode from database. Use when sure the original inode no longer exists.
-        
         (e.g. when its handle cannot be opened)"""
         with self.db.ensure_transaction():
             self.db.execute('delete from inodes where iid=?', iid)
@@ -403,7 +404,15 @@ class Scanner:
         if self.init_scan == 'all':
             #self.db.update('inodes', "type='d' and scan_state=?", SCAN_UP_TO_DATE, scan_state=SCAN_WANT_RESCAN)
             if self.recursive:
-                self.push_scan(SR_SCAN_RECURSIVE, self.get_root())
+                if self.start_path == Path():
+                    self.push_scan(SR_SCAN_RECURSIVE, self.get_root())
+                else:
+                    fd = FD.open(str(self.start_path), os.O_PATH, dir_fd=self.store.root_fd)
+                    info = InodeInfo(self.store, fd=fd)
+                    row = self.find_inode(info, create=False)
+                    if row is None:
+                        raise ValueError("Inode %s is not in Filoco database" % self.start_path)
+                    self.push_scan(SR_SCAN_RECURSIVE, info)
             else:
                 #self.scan_by_query('1', action=SR_CHECK)
                 check_call([FILOCO_LIBDIR/'check_helper', self.store.root_path])

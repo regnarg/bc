@@ -229,7 +229,7 @@ class SerialMDSync(MDSync):
 
 def main(args):
     # .buffer is for binary stdio
-    st = Store.find(args.store)
+    st, sub = Store.find(args.store)
     mdsync = MDSync(store=st, file=(sys.stdin.buffer, sys.stdout.buffer))
     asyncio.get_event_loop().run_until_complete(mdsync.run())
 

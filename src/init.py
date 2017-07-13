@@ -30,7 +30,7 @@ else:
 
 def main(dir = '.', synctree=False, n=None):
     if dir: os.chdir(dir or '.')
-    try: store = Store.find()
+    try: store, sub = Store.find()
     except StoreNotFound: pass
     else: err('Directory %s already in a Filoco store (%s).' % (os.getcwd(), store.root_path))
     try:

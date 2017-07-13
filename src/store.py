@@ -14,23 +14,23 @@ import json, hashlib
 
 ## class PerPartesTransactionManager:
 ##     """A class that splits a long-running transaction into several smaller ones.
-## 
+##
 ##     Use case: you have a long batch of SQL commands to execute (lasting perhaps
 ##     several minutes). These consist of small indivisible units of work
 ##     ("microtransactions") that are independent of each other. This class groups
 ##     such units into reasonably-sized """
-## 
+##
 ##     def __init__(self, con, begin_cmd='begin'):
 ##         self.con = con
 ##         self.cur = con.cursor()
 ##         self.begin_cmd = begin_cmd
 ##         self.start_time = 0
-## 
+##
 ##     def start_unit():
 ##         if not self.con.in_transaction:
 ##             self.con.execute(self.begin_cmd).close()
 ##             self.start_time = monotime()
-## 
+##
 ##     def end_unit(force_commit=False):
 ##         if self.in_transaction and (force_commit
 ##                 or monotime() - self.start_time > self.MAX_TRANS_DURATION):
@@ -94,7 +94,7 @@ class SyncTree:
         (as we are xorring, the update is the same for adding and removing)
 
         Call from within a transaction!"""
-        
+
         bin_id = codecs.decode(id, 'hex')
         pos = self.hash_pos(bin_id)
         chk = self.hash_chk(bin_id)
@@ -134,7 +134,7 @@ def lazy(init_func):
             val = init_func(self)
             setattr(self, attr, val)
             return val
-    
+
 
 class Store:
     root_fd = None
@@ -170,35 +170,53 @@ class Store:
     @classmethod
     def find(cls, dir='.'):
         """Find the root of a Filoco store containing `dir`.
-        
+
         Walk up `dir` and its parents until a directory with a `.filoco`
         subdirectory is found. This is very similar to what `git` does."""
-        if isinstance(dir, int): dfd = os.dup(dir)
-        else: dfd = os.open(dir, os.O_DIRECTORY)
-        try:
-            while True:
-                try: st = os.stat(META_DIR, dir_fd=dfd, follow_symlinks=False)
-                except FileNotFoundError: pass
-                else:
-                    store = Store(dfd)
-                    dfd = None # prevent closing
-                    return store
 
-                # We do not support stores that cross mount boundaries. This also
-                # takes care of stopping when we hit the root.
-                if is_mountpoint(dfd): break
+        pth = Path(dir).resolve()
+        store_pth = pth
+        sub_pth = []
 
-                parent = os.open("..", os.O_DIRECTORY|os.O_PATH, dir_fd=dfd)
-                os.close(dfd)
-                dfd = parent
+        while store_pth != '/' and not (store_pth / META_DIR).exists() and not is_mountpoint(store_pth):
+            sub_pth.append(store_pth.name)
+            store_pth = store_pth.parent
+
+        sub_pth = Path('/'.join(reversed(sub_pth)))
+
+        if not (store_pth / META_DIR).exists():
             raise StoreNotFound(dir)
-        finally:
-            if dfd is not None: os.close(dfd)
+
+        return cls(store_pth), sub_pth
+
+        #if isinstance(dir, int): dfd = os.dup(dir)
+        #else: dfd = os.open(dir, os.O_DIRECTORY)
+        #try:
+        #    while True:
+        #        try: st = os.stat(META_DIR, dir_fd=dfd, follow_symlinks=False)
+        #        except FileNotFoundError: pass
+        #        else:
+        #            store = Store(dfd)
+        #            dfd = None # prevent closing
+        #            return store
+
+        #        # We do not support stores that cross mount boundaries. This also
+        #        # takes care of stopping when we hit the root.
+        #        if is_mountpoint(dfd): break
+
+        #        parent = os.open("..", os.O_DIRECTORY|os.O_PATH, dir_fd=dfd)
+        #        os.close(dfd)
+        #        dfd = parent
+        #    raise StoreNotFound(dir)
+        #finally:
+        #    if dfd is not None: os.close(dfd)
 
     def compute_object_id(self, kind, origin=None, **data):
         data = dict(data)
         data['kind'] = kind
         data['origin'] = (origin or self.store_id).lower()
+        # Skip None/NULL fields to allow further extension without changing IDs.
+        data = {k:v for k,v in data.items() if v is not None}
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode('utf-8')).hexdigest()[:32]
 
     def add_syncable(self, id, kind, origin=None, serial=None, **data):
