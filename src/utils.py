@@ -454,6 +454,13 @@ class Protocol:
     def process_hello(self, remote_hello):
         pass
 
+    async def shutdown(self):
+        # Workaround for asyncio bug where all data is not flushed before closing socket
+        # https://vorpus.org/blog/some-thoughts-on-asynchronous-api-design-in-a-post-asyncawait-world/#bug-3-closing-time
+        self.out_stream.transport.set_write_buffer_limits(0)
+        await self.out_stream.drain()
+        self.out_stream.write_eof()
+
     async def prepare(self):
         self.in_stream = await aio_read_pipe(self.in_file)
         self.out_stream = await aio_write_pipe(self.out_file)

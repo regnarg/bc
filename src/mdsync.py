@@ -223,7 +223,8 @@ class SerialMDSync(MDSync):
             for row in self.db.query(query):
                 await self.send_by_syncable_row(row)
         self.send_sized(b'')
-        await self.out_stream.drain()
+        log.info('Sending done')
+        await self.shutdown()
 
 
 
