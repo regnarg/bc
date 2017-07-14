@@ -61,7 +61,8 @@ create table syncables (
     tree_key integer not null,
 #endif
     id text unique not null,
-    kind text not null
+    kind text not null,
+    created integer not null
 );
 
 #if sync_mode == 'serial'
@@ -70,8 +71,8 @@ create unique index syncables_origin_serial on syncables (
 );
 create view syncables_local as select * from syncables where origin_idx=0;
 create trigger syncables_local_insert instead of insert on syncables_local begin
-    insert into syncables (origin_idx, serial, id, kind)
-        values (0, coalesce(new.serial, (select max(serial) from syncables_local)+1, 1), new.id, new.kind);
+    insert into syncables (origin_idx, serial, id, kind, created)
+        values (0, coalesce(new.serial, (select max(serial) from syncables_local)+1, 1), new.id, new.kind, new.created);
 end;
 #endif
 
@@ -90,22 +91,34 @@ create table synctree (
 
 create table fobs (
     id text unique not null references syncables(id),
-    type text
+    type text,
+    _new_flvs integer not null default 0,
+    _new_fcvs integer not null default 0,
+    _has_inode integer not null default 0
 );
+
+create index fobs_new_flvs on fobs (_new_flvs);
+create index fobs_new_fcvs on fobs (_new_fcvs);
 
 create table flvs (
     id text unique not null references syncables(id),
     fob text not null references fobs(id),
     parent_fob text references fobs(id),
     name text,
-    parent_vers text
+    parent_vers text,
+    _is_head integer default 1
 );
+create index flvs_fob on flvs (fob, _is_head);
+
 create table fcvs (
     id text unique not null references syncables(id),
     fob text not null references fobs(id),
     content_hash text,
-    parent_vers text
+    parent_vers text,
+    _is_head integer default 1
 );
+create index fcvs_fob on flvs (fob, _is_head);
+
 create table srs (
     id text unique references syncables(id),
     fcv text,

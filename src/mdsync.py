@@ -38,6 +38,7 @@ class MDSync(Protocol):
         kind = row['kind']
         tbl = Store.TYPE2TABLE[kind]
         obj = self.db.query_first('select * from %s where id=?'%tbl, row['id'])
+        obj = {k:v for k,v in obj.items() if not k.startswith('_')} # underscored cols are internal
         to_send = {'kind': kind, 'origin': self.store_idx2id[row['origin_idx']], 'data': obj, 'id': row['id']}
         del obj['id']
         if self.store.sync_mode == 'serial':
@@ -47,18 +48,29 @@ class MDSync(Protocol):
         self.send_cbor(to_send)
         await self.out_stream.drain()
 
+    def object_received(self, obj):
+        kw = dict(obj['data'])
+        if self.store.sync_mode == 'serial':
+            kw['serial'] = obj['serial']
+        kind = obj['kind']
+        with self.db:
+            if kind in ('flv', 'fcv'):
+                kw.update({'_is_head': 1})
+                self.db.update('fobs', 'id=?', kw['fob'], **{'_new_%ss'%kind: 1})
+                if kw['parent_vers']:
+                    for parent_ver in kw['parent_vers'].split(','):
+                        self.db.update(Store.TYPE2TABLE[kind], 'id=?', parent_ver, _is_head=0)
+            self.store.add_syncable(obj['id'], obj['kind'], origin=obj['origin'], **kw)
+
     async def recv_objects(self):
         while True:
-            for i in range(1000):
-                # XXX this transacton affects the concurrent send task! is it a problem?
-                with self.db:
+            # XXX this transacton affects the concurrent send task! is it a problem?
+            with self.db.ensure_transaction():
+                for i in range(5000):
                     data = await self.recv_sized()
                     if not data: break
                     obj = cbor.loads(data)
-                    kw = dict(obj['data'])
-                    if self.store.sync_mode == 'serial':
-                        kw['serial'] = obj['serial']
-                    self.store.add_syncable(obj['id'], obj['kind'], origin=obj['origin'], **kw)
+                    self.object_received(obj)
             if not data: break
 
     async def exchange_objects(self, to_send):
@@ -71,7 +83,9 @@ class MDSync(Protocol):
     async def run(self):
         await self.prepare()
         to_send = await self.compute_diff()
-        await self.exchange_objects(to_send)
+        #with self.db:
+        if 1:
+            await self.exchange_objects(to_send)
 
 class TreeMDSync(MDSync):
     # TODO: make parameters configurable per-world (all stores in a world must

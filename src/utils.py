@@ -82,6 +82,7 @@ class SqliteWrapper(object):
         # XXX This waits using a (quite tight) busy loop (WTF?). Will probably
         # have to replace it with some sane custom locking.
         self.connection.setbusytimeout(int(timeout*1000))
+        self._dummy_created = False
 
     def _iter(self, cur, assoc=True):
         col_names = None
@@ -164,13 +165,28 @@ class SqliteWrapper(object):
         if self.connection.getautocommit(): return self
         else: return null_contextmanager()
 
+    def lock_now(self):
+        """Acquire a RESERVED lock (like BEGIN IMMEDIATE), preventing concurrent writes from other connections.
+
+        Normally a RESERVED lock is acquired on first write or BEGIN IMMEDIATE.
+        But BEGIN IMMEDIATE does not support nested tranactions. So the only
+        way to enforce a RESERVED lock, whether we are in a nested transaction
+        or not, is to do a dummy write to the database.
+
+        This is neccessary to support an atomic read-modify-write, for example."""
+
+        # A dummy SQL update that does nothing
+        if not self._dummy_created:
+            self.execute("create table if not exists lock_dummy (dummy)")
+        self.execute("update lock_dummy set dummy=1 where 0=0")
+
 def fdscandir(fd):
     """Read the contents of a directory identified by file descriptor `fd`."""
     return os.scandir("/proc/self/fd/%d" % fd)
 
 def frealpath(fd):
     """Return the path of the open file referenced by `fd`.
-    
+
     The output should be similar to realpath(), normalized and with
     symlinks resolved."""
 
@@ -219,7 +235,7 @@ def openat(path, *args, dir_fd=None, **kw):
 
 def slurp(path, *, dir_fd=None):
     """Return the whole content of a file as a string.
-    
+
     Inspired by a namesake function in Perl 6."""
     with openat(str(path), 'r', dir_fd=dir_fd) as file: return file.read()
 def spurt(path, content, *, dir_fd=None):

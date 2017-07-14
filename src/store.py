@@ -36,6 +36,12 @@ import json, hashlib
 ##                 or monotime() - self.start_time > self.MAX_TRANS_DURATION):
 ##             self.con.execute('commit').close()
 
+# Scan state constants
+SCAN_NEVER_SCANNED = 0
+SCAN_NEEDS_RESCAN = 1
+SCAN_WANT_RESCAN = 2
+SCAN_UP_TO_DATE = 100
+
 META_DIR = '.filoco'
 
 class StoreNotFound(FileNotFoundError):
@@ -135,12 +141,86 @@ def lazy(init_func):
             setattr(self, attr, val)
             return val
 
+class InodeInfo:
+    __slots__ = ('store', '_fd', 'handle', 'stat', 'ino', 'iid', 'ino', 'type')
+    def __init__(self, store, **kw):
+        for attr in InodeInfo.__slots__: setattr(self, attr, None)
+        self.store = store # TODO: weakref?
+        for k,v in kw.items(): setattr(self, k, v)
+        if isinstance(self.fd, int): self.fd = FD(self.fd)
+    @classmethod
+    def from_db(cls, store, row):
+        """Create an InodeInfo from a row in the `inodes` table."""
+        return cls(store, handle=FileHandle(row.handle_type, row.handle), ino=row.ino, type=row.type, iid=row.iid)
+
+    def release_fd(self):
+        """Convert self.fd into a weakref so that we do not keep the FD open too long."""
+        if isinstance(self._fd, WeakRef): return
+        if self.fd is None: return
+        self.get_handle() # because fd might be released unexpectedly, we must keep handle
+        self._fd = WeakRef(self._fd)
+
+    def close(self):
+        if self.fd is None: return
+        self.fd = None
+
+    @property
+    def fd(self):
+        if isinstance(self._fd, WeakRef):
+            fd = self._fd()
+            if fd is None: self._fd = None
+            return fd
+        else:
+            return self._fd
+
+    @fd.setter
+    def fd(self, fd):
+        self._fd = fd
+
+    def get_handle(self): # TODO: ,check=False
+        if self.handle:
+            return self.handle
+        elif self.fd:
+            self.handle = name_to_handle_at(self.fd.fd, "", AT_EMPTY_PATH)[0]
+            return self.handle
+        else:
+            raise NotImplementedError # TODO: lookup from db?
+
+    def get_fd(self):
+        fd = self.fd
+        if fd is None:
+            if not self.handle: raise ValueError()
+            fd = self._fd = self.store.open_handle(self.handle, os.O_PATH)
+        return fd
+
+    def get_stat(self, force=False):
+        if force or not self.stat:
+            self.stat = st = os.fstat(self.get_fd())
+            self.ino = st.st_ino
+            self.type = mode2type(st)
+        return self.stat
+
+    def clear_stat(self):
+        self.stat = None
+
+    def get_ino(self):
+        if not self.ino: self.get_stat()
+        return self.ino
+    def get_type(self):
+        if not self.type: self.get_stat()
+        return self.type
+
+    def __repr__(self):
+        attrs = ['fd', 'handle', 'ino', 'iid']
+        args = ', '.join( '%s=%r'%(attr, getattr(self,attr)) for attr in attrs if getattr(self, attr, None) )
+        return 'InodeInfo(%s)' % args
 
 class Store:
     root_fd = None
     meta_fd = None
     SQLITE_CACHE_MB = 256
     TYPE2TABLE = {'fob': 'fobs', 'fcv': 'fcvs', 'flv': 'flvs'}
+    PLACEHOLDER_TARGET = '/!/filoco-missing'
 
     def __init__(self, root):
         if isinstance(root, int):
@@ -166,6 +246,59 @@ class Store:
     #@lazy
     #def db(self):
     #    return self.open_db()
+
+    def create_inode(self, info, *, iid=None, **kw):
+        if iid is None: iid = gen_uuid()
+        fd = info.get_fd() # keep inode alive
+        st = info.get_stat()
+        handle = info.get_handle()
+        ftype = info.get_type()
+        # We can insert safely without any locking. Because we hold an open FD to
+        # the inode, it cannot just disappear and thus we are writing correct data.
+        self.db.insert('inodes', ino=st.st_ino, handle_type=handle[0], handle=handle[1], iid=iid, type=ftype,
+                        size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime,
+                        btime=st.st_mtime, # btime currently not available b/c of missing statx userspace wrapper
+                        scan_state=(SCAN_NEVER_SCANNED if ftype=='d' else SCAN_UP_TO_DATE))
+        #self.db.insert('fslog', event=EVENT_CREATE, iid=iid)
+        ret = self.db.query_first('select * from inodes where ino=?', st.st_ino)
+        info.iid = ret['iid']
+        return ret
+
+    def find_inode(self, info):
+        handle = info.get_handle()
+        ino = info.get_ino()
+        with self.db.ensure_transaction():
+            obj = self.db.query_first('select * from inodes where ino=?', ino)
+            if obj is not None:
+                obj_handle = FileHandle(obj.handle_type, obj.handle)
+                if obj_handle == handle or self.store.handle_exists(obj_handle):
+                    info.iid = obj['iid']
+                    return obj
+                else:
+                    self.do_delete_inode(obj.iid)
+            else:
+                return None
+
+    def find_or_create_inode(self, info):
+        with self.db.ensure_transaction():
+            self.db.lock_now()
+            fd = info.get_fd() # hold fd to prevent races
+            inode = self.find_inode(info)
+            created = False
+            if inode is None:
+                inode = self.create_inode(info)
+                created = True
+            return inode, created
+
+    def get_root(self):
+        db_root = self.db.query_first("select * from inodes where iid='ROOT'")
+        if db_root is None: raise RuntimeError("Missing root inode")
+        root_info = InodeInfo(self, fd=self.root_fd)
+        db_root2 = self.find_inode(root_info)
+        if db_root2 is None or db_root2.iid != 'ROOT':
+            raise RuntimeError('Root inode was replaced. This is not supported.')
+        return db_root, root_info
+
 
     @classmethod
     def find(cls, dir='.'):
@@ -219,23 +352,24 @@ class Store:
         data = {k:v for k,v in data.items() if v is not None}
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode('utf-8')).hexdigest()[:32]
 
-    def add_syncable(self, id, kind, origin=None, serial=None, **data):
+    def add_syncable(self, id, kind, origin=None, serial=None, created=None, **data):
         if id is None:
             #if kind == 'fob': id = gen_uuid()
             #else: id = self.compute_object_id(kind, origin, **data)
             id = gen_uuid()
         if origin is None: origin_idx = 0
         else: origin_idx = self.get_store_idx(origin)
+        if created is None: created = time.time()
 
         if self.sync_mode == 'synctree':
-            self.synctree.add(id, kind, origin_idx=origin_idx)
+            self.synctree.add(id, kind, origin_idx=origin_idx, created=created)
         else:
             if serial is None:
                 assert origin is None
-                self.db.execute('insert into syncables_local (id, kind) values (?, ?)', id, kind)
+                self.db.execute('insert into syncables_local (id, kind, created) values (?, ?, ?)', id, kind, created)
             else:
-                self.db.execute('insert into syncables (id, kind, origin_idx, serial) values (?, ?, ?, ?)',
-                                    id, kind, origin_idx, serial)
+                self.db.execute('insert into syncables (id, kind, origin_idx, serial, created) values (?, ?, ?, ?, ?)',
+                                    id, kind, origin_idx, serial, created)
         self.db.insert(self.TYPE2TABLE[kind], id=id, **data)
         return id
 
@@ -263,7 +397,7 @@ class Store:
 
     def create_fob(self, *, type, name=None, parent=None):
         with self.db.ensure_transaction():
-            fob_id = self.add_syncable(None, 'fob')
+            fob_id = self.add_syncable(None, 'fob', type=type)
             flv_id = self.add_syncable(None, 'flv', parent_fob=parent, name=name, parent_vers='', fob=fob_id)
             if type == 'r':
                 fcv_id = self.create_working_version(fob_id, [])

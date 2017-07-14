@@ -2,6 +2,7 @@
 
 import sys, os, tempfile, shutil
 import jinja2
+import butter.fhandle
 
 from utils import *
 from store import *
@@ -58,6 +59,11 @@ def main(dir, *, synctree=False, name:'n'=None):
         with open('.filoco.tmp/store_key', 'wb') as file:
             os.chmod('.filoco.tmp/store_key', 0o600)
             file.write(priv_key)
+
+        st = os.lstat('.')
+        handle = butter.fhandle.name_to_handle_at(butter.fhandle.AT_FDCWD, '.')[0]
+        db.insert('inodes', iid='ROOT', ino=st.st_ino, handle_type=handle.type, handle=handle.handle,
+                size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime, type='d')
 
         os.rename('.filoco.tmp', '.filoco')
         
