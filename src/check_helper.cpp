@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <math.h>
@@ -25,9 +26,28 @@ struct item {
     ino_t ino;
 };
 
+sqlite3 *db;
+const char *progname;
+
+void sqlexec(const char *query) {
+    char *err;
+    int rc = sqlite3_exec(
+      db,
+      query,
+      NULL,
+      NULL,
+      &err
+    );
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "%s: error: SQLite error: %s", progname, err);
+        exit(1);
+    }
+
+}
+
 
 int main(int argc, char **argv) {
-    sqlite3 *db;
+    progname = argv[0];
     int rc;
 
     if (argc != 2) {
@@ -45,6 +65,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Can't open metadata database: %s\n", sqlite3_errmsg(db));
         return 1;
     }
+
+    sqlexec("PRAGMA journal_mode=WAL; pragma synchronous=normal;");
 
     sqlite3_busy_timeout(db, 10000);
     
@@ -119,6 +141,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "%s: info: found %lu changes\n", argv[0], changed.size());
 
     fprintf(stderr, "%s: info: updating database\n", argv[0]);
+    sqlexec("begin");
     sqlite3_stmt *upd;
     rc = sqlite3_prepare_v2(db, "update inodes set scan_state=1 where handle_type=? and handle=?", -1, &upd, NULL);
     if (rc != SQLITE_OK){
@@ -142,6 +165,7 @@ int main(int argc, char **argv) {
 
     }
 
+    sqlexec("commit");
     // printf("done\n");
     // getc(stdin);
     fprintf(stderr, "%s: info: done\n", argv[0]);
