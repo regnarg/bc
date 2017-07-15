@@ -288,10 +288,19 @@ class Scanner:
                 # TODO: from_notify delay
                 if self.from_notify and time.time() - obj.btime < self.FOB_CREATE_WAIT:
                     pass
+                # Longnames should always point to inodes created by Filoco for existing FOBs.
+                # They should come with pre-created inode record in DB associated to a FOB.
+                # If there is a longname without iid/FOB, it's a bug.
+                if Store.LONGNAME_SEPARATOR in name:
+                    log.warning("Longname without FOB: %s/%s (iid %s)", parent_obj.fob, name, obj.iid)
+                    return
                 self.create_fob(parent_obj.fob, name, info, obj)
             elif obj.fob:
                 assert obj.flv
                 logical_name = name.split(Store.LONGNAME_SEPARATOR)[0]
+                # Renaming a longname object does not propagate. If you want to rename it globally,
+                # rename it to a shortname.
+                if Store.LONGNAME_SEPARATOR in name: return
                 new_flv = self.store.create_flv(fob=obj.fob, parent_fob=parent_obj.fob,
                                                 name=logical_name, parent_vers=obj.flv)
                 self.db.update('inodes', 'iid=?', obj.iid, flv=new_flv)

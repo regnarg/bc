@@ -22,6 +22,8 @@ class UpdateTask:
         self.parent_task = parent_task
         self.src_name = None
         self.src_dirfs = None
+        self.new_flv_stamp = -1
+        self.new_links = []
 
     def get_parent_inode(self):
         if self.parent_inode is not None:
@@ -111,7 +113,7 @@ class MDApply:
             if isinstance(fob, str):
                 fob_id = fob
                 if fob_id in by_fob: return by_fob[fob_id]
-                fob = self.db.query_first('select * from fobs where id=?', fob_id)
+                fob = self.db.query_first('select rowid,* from fobs where id=?', fob_id)
                 if not fob: raise TooMessy("Missing dependent FOB %s needed for %s as %s." % (fob_id, needed_for.id, needed_role))
             if fob.id in by_fob: return by_fob[fob.id]
             if fob.id in adding:
@@ -146,6 +148,7 @@ class MDApply:
                     raise TooMessy("Error querying for exising inode in target location (%s, %s): %s"%(flv.parent_fob, flv.name, str(e)))
 
             task = UpdateTask(fob, flv, parent_inode=parent_inode, parent_info=parent_info, parent_task=parent_task)
+            task.new_flv_stamp = fob._new_flvs
             by_fob[fob.id] = task
             ret.append(task)
             return task
@@ -158,10 +161,11 @@ class MDApply:
 
         return ret
 
-    def collect_update_batch(self):
+    def collect_update_batch(self, start):
         with self.db.ensure_transaction():
             self.db.lock_now()
-            fobs = list(self.db.query('select * from fobs where _new_flvs>0 limit ?', self.UPDATE_BATCH_SIZE))
+            fobs = list(self.db.query('select rowid,* from fobs where _new_flvs>0 and rowid>=? order by rowid asc limit ?',
+                            start, self.UPDATE_BATCH_SIZE))
             return self.extend_update_batch(fobs)
 
     def create_new_inodes(self, batch):
@@ -211,8 +215,10 @@ class MDApply:
             if target_info is None:
                 log.warning("Target inode not found for FOB %s. Skipping.", fob.id)
                 continue
+            new_links = []
             if task.src_name:
-                self.rename_to_longname(task.src_dfd, task.src_name, target_info.fd, logical_name, fob=fob.id)
+                target_name = self.rename_to_longname(task.src_dfd, task.src_name, target_info.fd, logical_name, fob=fob.id)
+                new_links.append((target_info, target_name, True))
             else:
                 inodes = self.get_fob_inodes(fob.id)
                 # This part is tricky: we want to find all links to all inodes tied to this FOB.
@@ -238,16 +244,54 @@ class MDApply:
                 if not good_links:
                     log.warning("No good links found for FOB %s, not renaming. Please rescan and run mdapply again.", fob.id)
                     continue
-                longname_links = []
                 for parent_inode, parent_info, name, inode, info, link_rowid in good_links:
                     target_name = self.rename_to_longname(parent_info.fd, name, target_info.fd, logical_name, fob=fob.id)
                     new_fd = FD.open(target_name, os.O_PATH|os.O_NOFOLLOW, dir_fd=target_info.fd)
+                    was_short = Store.LONGNAME_SEPARATOR not in name
+                    new_links.append((target_info, target_name, was_short))
+            task.new_links = new_links
 
+    def move_to_shortnames(self, batch):
+        for task in batch:
+            new_links = task.new_links
+            # If we renamed more links, we must now decide which one to promote to a shortname.
+            #   * If there is a pigeonhole conflict, none.
+            #   * If there only one, we take that one.
+            #   * If there is only one that originally had a shortname, we take that.
+            #   * Otherwise we leave all with longnames.
+            conflicts = self.get_pigeonhole_conflicts(task.flv)
+            if conflicts:
+                log.info("Location %s/%s has a pigeonhole conflict. Keeping all files with longnames.",
+                        task.flv.parent_fob, task.flv.name)
+            elected = None
+            if len(new_links) == 1:
+                elected = new_links[0]
+            else:
+                originally_short = [ x for x in new_links if x[2] ]
+                if len(originally_short) == 1:
+                    elected = originally_short[0]
+            if elected is None:
+                log.warning("Cannot determine which inode/link for FOB %s (%s/%s) to promote to shortname. Keeping all with longnames.",
+                            task.fob.id, task.flv.parent_fob, task.flv.name)
+                continue
+            parent_info, name, _ = elected
+            try:
+                renameat2(+parent_info.fd, name, +parent_info.fd, name.split(Store.LONGNAME_SEPARATOR)[0], RENAME_NOREPLACE)
+            except FileExistsError:
+                log.warning("Cannot rename %s/%s to shortname, something is in the way.", task.flv.parent_fob, name)
+                continue
 
-    def perform_one_batch(self):
+    def mark_as_updated(self, batch):
+        for task in batch:
+            # We use stamp versioning to prevent races when clearing _new_flv stamps.
+            self.db.execute('update fobs set _new_flvs=0 where id=? and _new_flvs=?',
+                    task.fob.id, task.new_flv_stamp)
+
+    def perform_one_batch(self, start):
         with self.db.ensure_transaction():
             self.db.lock_now()
-            batch = self.collect_update_batch()
+            batch = self.collect_update_batch(start)
+            if not batch: return None
             self.cleanup_placeholders()
             self.create_new_inodes(batch)
         # Synchronize all changes to disk. This is done before moving new inodes
@@ -261,13 +305,26 @@ class MDApply:
             self.move_to_longnames(batch)
             # Then, whenever possible, move back to a corresponding shortname (unless
             # there is a conflict or an intervening untracked inode).
-            #self.move_to_shortnames(batch)
-            # sync
-            # update db
+            self.move_to_shortnames(batch)
+
+            # Make sure all metadata changes go to disk before marking them as done
+            # (otherwise we won'T retry renames after power failure)
+            syncfs(+self.store.root_fd)
+            self.mark_as_updated(batch)
+
+        return batch[-1].fob.rowid
 
 
     def run(self):
-        self.perform_one_batch()
+        start = 0
+        while True:
+            log.debug("Running batch, start = %d", start)
+            end = self.perform_one_batch(start)
+            # We use destructors to automatically close FDs but Python's refcounting apparently
+            # is not that reliable. Force a GC to free up unused FDs.
+            import gc; gc.collect()
+            if end is None: break
+            start = end + 1
 
 
 
