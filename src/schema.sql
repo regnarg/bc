@@ -19,6 +19,7 @@ create table inodes (
 -- including 'ino' in the index helps sorting
 create index inodes_type_state on inodes (type, scan_state, ino);
 create index inodes_state on inodes (scan_state, ino);
+create index inodes_fob on inodes (fob);
 create unique index inodes_handle on inodes (handle_type, handle);
 create index new_inodes on inodes (ino) where fob is null;
 
@@ -109,6 +110,7 @@ create table flvs (
     _is_head integer default 1
 );
 create index flvs_fob on flvs (fob, _is_head);
+create index flvs_loc on flvs (parent_fob, name);
 
 create table fcvs (
     id text unique not null references syncables(id),
