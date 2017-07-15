@@ -56,7 +56,7 @@ class MDSync(Protocol):
         with self.db:
             if kind in ('flv', 'fcv'):
                 kw.update({'_is_head': 1})
-                self.db.update('fobs', 'id=?', kw['fob'], **{'_new_%ss'%kind: 1})
+                self.db.update('fobs', 'id=?', kw['fob'], **{'_new_%ss'%kind: time.time()})
                 if kw['parent_vers']:
                     for parent_ver in kw['parent_vers'].split(','):
                         self.db.update(Store.TYPE2TABLE[kind], 'id=?', parent_ver, _is_head=0)

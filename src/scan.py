@@ -119,14 +119,6 @@ class Scanner:
             log.debug("fanotify_worker sleeping")
             await asyncio.sleep(self.FANOTIFY_INTERVAL)
 
-    def do_delete_inode(self, iid):
-        """Delete a given inode from database. Use when sure the original inode no longer exists.
-        (e.g. when its handle cannot be opened)"""
-        with self.db.ensure_transaction():
-            self.db.execute('delete from inodes where iid=?', iid)
-            #if self.db.changes():
-            #    self.db.insert('fslog', event=EVENT_DELETE, iid=iid)
-
 
     def push_scan(self, action, target):
         if self.queue_fds >= self.QUEUE_MAX_FDS:
@@ -150,7 +142,7 @@ class Scanner:
         try:
             st = info.get_stat(True)
         except (StaleHandle, FileNotFoundError):
-            self.delete_inode(info)
+            self.store.delete_inode(info)
             #self.store.delete_object(info) # TODO delete from database
             return
         disk_tuple = (st.st_size, st.st_mtime, st.st_ctime, SCAN_UP_TO_DATE)
@@ -299,14 +291,11 @@ class Scanner:
                 self.create_fob(parent_obj.fob, name, info, obj)
             elif obj.fob:
                 assert obj.flv
+                logical_name = name.split(Store.LONGNAME_SEPARATOR)[0]
                 new_flv = self.store.create_flv(fob=obj.fob, parent_fob=parent_obj.fob,
-                                                name=name, parent_vers=obj.flv)
+                                                name=logical_name, parent_vers=obj.flv)
                 self.db.update('inodes', 'iid=?', obj.iid, flv=new_flv)
                 obj.flv = new_flv
-
-    def delete_inode(self, info):
-        log.debug('Deleting inode %r from database', info)
-        self.db.execute('delete from inodes where iid=?', info.iid)
 
     def queue_unscanned(self, action=SR_SCAN):
         #limit = self.scan_queue.maxsize - self.scan_queue.qsize()

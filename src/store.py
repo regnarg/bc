@@ -12,6 +12,9 @@ from butter.fhandle import *
 from pathlib import Path
 import json, hashlib
 
+import logging
+log = logging.getLogger('filoco.store')
+
 ## class PerPartesTransactionManager:
 ##     """A class that splits a long-running transaction into several smaller ones.
 ##
@@ -220,7 +223,16 @@ class Store:
     meta_fd = None
     SQLITE_CACHE_MB = 256
     TYPE2TABLE = {'fob': 'fobs', 'fcv': 'fcvs', 'flv': 'flvs'}
+    # Files whose dara is not currently stored in this store are represented by symlinks
+    # with a fake nonexistent target. We call these links *placeholders*.
     PLACEHOLDER_TARGET = '/!/filoco-missing'
+    # Whenever we cannot use the logical name of an object as a file name as it appears
+    # in the FLV (e.g. when there is a conflict between two versions of a file or a pigeonhole
+    # conflict between two files wanting to use the same name), we use a so-called
+    # longname in the form <logical name>.FL-<suffix>. These special names are detected by
+    # the scanner and the suffix is stripped when creating FLVs so longnames are always
+    # restricted to the local filesystem and never make it to the synced metadata.
+    LONGNAME_SEPARATOR = '.FL-'
 
     def __init__(self, root):
         if isinstance(root, int):
@@ -236,6 +248,8 @@ class Store:
         self.meta_fd = FD.open(META_DIR, os.O_DIRECTORY, dir_fd=self.root_fd)
         self.store_id = slurp(self.meta_path / 'store_id')
         self.sync_mode = slurp(self.meta_path / 'sync_mode')
+        root_stat = os.fstat(self.root_fd)
+        self.owner = (root_stat.st_uid, root_stat.st_gid)
         self.open_db()
         if self.sync_mode == 'synctree':
             self.synctree = SyncTree(self.db)
@@ -258,7 +272,7 @@ class Store:
         self.db.insert('inodes', ino=st.st_ino, handle_type=handle[0], handle=handle[1], iid=iid, type=ftype,
                         size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime,
                         btime=st.st_mtime, # btime currently not available b/c of missing statx userspace wrapper
-                        scan_state=(SCAN_NEVER_SCANNED if ftype=='d' else SCAN_UP_TO_DATE))
+                        scan_state=(SCAN_NEVER_SCANNED if ftype=='d' else SCAN_UP_TO_DATE), **kw)
         #self.db.insert('fslog', event=EVENT_CREATE, iid=iid)
         ret = self.db.query_first('select * from inodes where ino=?', st.st_ino)
         info.iid = ret['iid']
@@ -279,14 +293,14 @@ class Store:
             else:
                 return None
 
-    def find_or_create_inode(self, info):
+    def find_or_create_inode(self, info, **kw):
         with self.db.ensure_transaction():
             self.db.lock_now()
             fd = info.get_fd() # hold fd to prevent races
             inode = self.find_inode(info)
             created = False
             if inode is None:
-                inode = self.create_inode(info)
+                inode = self.create_inode(info, **kw)
                 created = True
             return inode, created
 
@@ -307,11 +321,11 @@ class Store:
         Walk up `dir` and its parents until a directory with a `.filoco`
         subdirectory is found. This is very similar to what `git` does."""
 
-        pth = Path(dir).resolve()
+        pth = Path(os.path.abspath(dir))
         store_pth = pth
         sub_pth = []
 
-        while store_pth != '/' and not (store_pth / META_DIR).exists() and not is_mountpoint(store_pth):
+        while store_pth != '/' and not (store_pth / META_DIR).exists() and (store_pth.is_symlink() or not is_mountpoint(store_pth)):
             sub_pth.append(store_pth.name)
             store_pth = store_pth.parent
 
@@ -413,7 +427,7 @@ class Store:
             parent = self.db.query_first('select s.origin_idx as origin_idx, v.content_hash as content_hash from fcvs v join syncables s on s.id=v.id where v.id=?', parent_vers[0])
             if parent.origin_idx == 0 and parent.content_hash is None:
                 return parent_vers[0]
-        id = self.add_syncable(None, 'fcv', content_hash=None, parent_vers=','.join(parent_vers), fob=fob)
+        id = self.add_syncable(None, 'fcv', content_hash=None, parent_vers=','.join(parent_vers), fob=fob, _is_head=1)
         return id
 
     def create_flv(self, fob, parent_fob, name, parent_vers):
@@ -424,8 +438,13 @@ class Store:
             if parent.parent_fob == parent_fob and parent.name == name:
                 return parent.id
         id = self.add_syncable(None, 'flv', parent_vers=','.join(parent_vers),
-                                fob=fob, parent_fob=parent_fob, name=name)
+                                fob=fob, parent_fob=parent_fob, name=name, _is_head=1)
         return id
+
+    def delete_inode(self, info):
+        log.debug('Deleting inode %r from database', info)
+        self.db.execute('delete from inodes where iid=?', info.iid)
+
 
     def get_store_idx(self, id):
         try: return self.store_idx_cache[id]
@@ -439,7 +458,7 @@ class Store:
     def get_store_id(self, idx):
         try: return self.store_id_cache[idx]
         except KeyError: pass
-        row = self.db.query_first('select idx from stores where id=?', id)
+        row = self.db.query_first('select id from stores where idx=?', idx)
         if row is None:
             raise KeyError(idx)
         self.store_id_cache[idx] = id = row['id']
