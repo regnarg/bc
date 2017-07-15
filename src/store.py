@@ -270,7 +270,7 @@ class Store:
         # We can insert safely without any locking. Because we hold an open FD to
         # the inode, it cannot just disappear and thus we are writing correct data.
         self.db.insert('inodes', ino=st.st_ino, handle_type=handle[0], handle=handle[1], iid=iid, type=ftype,
-                        size=st.st_size, mtime=st.st_mtime, ctime=st.st_ctime,
+                        size=st.st_size, mtime=st.st_mtime,
                         btime=st.st_mtime, # btime currently not available b/c of missing statx userspace wrapper
                         scan_state=(SCAN_NEVER_SCANNED if ftype=='d' else SCAN_UP_TO_DATE), **kw)
         #self.db.insert('fslog', event=EVENT_CREATE, iid=iid)
@@ -466,4 +466,4 @@ class Store:
 
 
 def stat_tuple(st):
-    return {'mtime': st.st_mtime, 'ctime': st.st_ctime, 'size': st.st_size, 'ino': st.st_ino}
+    return {'mtime': st.st_mtime, 'size': st.st_size, 'ino': st.st_ino}

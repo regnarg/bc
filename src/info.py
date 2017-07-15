@@ -22,9 +22,9 @@ class InfoPrinter:
         self.print("File handle: %d:%s" % (handle.type, binhex(handle.handle)))
         if inode:
             self.print("DB handle:   %d:%s" % (inode.handle_type, binhex(inode.handle)))
-        self.print("Stat tuple: ", (st.st_size, st.st_mtime, st.st_ctime))
+        self.print("Stat tuple: ", (st.st_size, st.st_mtime))
         if inode:
-            self.print("DB   tuple: ", (inode.size, inode.mtime, inode.ctime))
+            self.print("DB   tuple: ", (inode.size, inode.mtime))
         if inode is None:
             self.print("No inode record")
             return

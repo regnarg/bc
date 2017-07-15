@@ -22,7 +22,6 @@ struct item {
     char f_handle[MAX_HANDLE_SZ];
     ssize_t size;
     double mtime;
-    double ctime;
     ino_t ino;
 };
 
@@ -71,8 +70,8 @@ int main(int argc, char **argv) {
     sqlite3_busy_timeout(db, 10000);
     
     sqlite3_stmt *stmt;
-    //                                   0        1          2     3      4      5
-    rc = sqlite3_prepare_v2(db, "select ino, handle_type, handle, size, mtime, ctime from inodes where scan_state=100 order by ino asc", -1, &stmt, NULL);
+    //                                   0        1          2     3      4
+    rc = sqlite3_prepare_v2(db, "select ino, handle_type, handle, size, mtime from inodes where scan_state=100 order by ino asc", -1, &stmt, NULL);
 
     if (rc != SQLITE_OK){
         fprintf(stderr, "SQL error: %d\n", rc);
@@ -94,7 +93,6 @@ int main(int argc, char **argv) {
             itm.handle_bytes = sqlite3_column_bytes(stmt, 2);
             itm.size = sqlite3_column_int64(stmt, 3);
             itm.mtime = sqlite3_column_double(stmt, 4);
-            itm.ctime = sqlite3_column_double(stmt, 5);
             itm.ino = (ino_t)sqlite3_column_int64(stmt,0);
             if (itm.handle_bytes > MAX_HANDLE_SZ) {
                 fprintf(stderr, "Handle too big for ino %llu (type %d, %d bytes)\n",
@@ -131,10 +129,9 @@ int main(int argc, char **argv) {
         }
         close(fd);
         double mtime = st.st_mtim.tv_sec + (double) st.st_mtim.tv_nsec / 1e9;
-        double ctime = st.st_ctim.tv_sec + (double) st.st_ctim.tv_nsec / 1e9;
-        if (st.st_size != itm.size || fabs(mtime - itm.mtime) > 1e-4 || fabs(ctime - itm.ctime) > 1e-4) {
-            fprintf(stderr, "Detected change: ino=%llu, size=%zd/%zd, mtime=%f/%f, ctime=%f/%f\n",
-                    (unsigned long long)st.st_ino, itm.size, st.st_size, itm.mtime, mtime, itm.ctime, ctime);
+        if (st.st_size != itm.size || fabs(mtime - itm.mtime) > 1e-4) {
+            fprintf(stderr, "Detected change: ino=%llu, size=%zd/%zd, mtime=%f/%f",
+                    (unsigned long long)st.st_ino, itm.size, st.st_size, itm.mtime, mtime);
             changed.push_back(itm);
         }
     }

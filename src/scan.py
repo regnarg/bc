@@ -36,7 +36,7 @@ ScanRequest = namedtuple('ScanRequest', 'prio seq action target')
 # prio: the sort priority (usually the inode number to faciliate sequential access,
 #       but it could also be real importance-based priority)
 # action: one of
-SR_CHECK = 1 # do a stat and compare type/size/mtime/ctime, do rescan if necessary
+SR_CHECK = 1 # do a stat and compare type/size/mtime do rescan if necessary
 SR_SCAN = 2  # do a full rescan of contents (i.e., readdir)
 SR_SCAN_RECURSIVE = 3 # ...and recurse to all subdirs
 
@@ -145,8 +145,8 @@ class Scanner:
             self.store.delete_inode(info)
             #self.store.delete_object(info) # TODO delete from database
             return
-        disk_tuple = (st.st_size, st.st_mtime, st.st_ctime, SCAN_UP_TO_DATE)
-        db_tuple = self.db.query_first('select size, mtime, ctime, scan_state from inodes where iid=?', info.iid, _assoc=False)
+        disk_tuple = (st.st_size, st.st_mtime, SCAN_UP_TO_DATE)
+        db_tuple = self.db.query_first('select size, mtime, scan_state from inodes where iid=?', info.iid, _assoc=False)
         if disk_tuple != db_tuple:
             if D_SCAN: log.debug('Change! db tuple: %r, fs tuple: %r', db_tuple, disk_tuple)
             # Probably better to scan now than queue it because the inode is already
@@ -169,11 +169,11 @@ class Scanner:
                 with self.db.ensure_transaction():
                     new_fcv = self.store.create_working_version(obj.fob, obj.fcv)
                     self.db.update('inodes', 'iid=?', info.iid, fcv=new_fcv, scan_state=SCAN_UP_TO_DATE,
-                                size=info.stat.st_size, mtime=info.stat.st_mtime, ctime=info.stat.st_ctime)
+                                size=info.stat.st_size, mtime=info.stat.st_mtime)
                     obj.fcv = new_fcv
             else:
                 self.db.update('inodes', 'iid=?', info.iid, scan_state=SCAN_UP_TO_DATE,
-                                size=info.stat.st_size, mtime=info.stat.st_mtime, ctime=info.stat.st_ctime)
+                                size=info.stat.st_size, mtime=info.stat.st_mtime)
 
             
 

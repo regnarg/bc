@@ -9,7 +9,6 @@ create table inodes (
     scan_state integer default 0,
     size integer,
     mtime integer,
-    ctime integer,
     btime integer, -- creation time (if available), otherwise discover time
     fob text references fobs(id),
     flv text references flvs(id),
