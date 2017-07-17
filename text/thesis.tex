@@ -31,6 +31,8 @@
 %% Character encoding: usually latin2, cp1250 or utf8:
 \usepackage[utf8]{inputenc}
 
+\usepackage[english]{babel}
+
 %% Prefer Latin Modern fonts
 \usepackage{lmodern}
 
@@ -50,6 +52,15 @@
 \usepackage{booktabs}       % improved horizontal lines in tables
 \usepackage{paralist}       % improved enumerate and itemize
 \usepackage[usenames]{xcolor}  % typesetting in color
+\usepackage[
+   backend=biber        % if we want unicode
+  ,style=iso-numeric
+  ,autolang=other       % to support multiple languages in bibliography
+  ,sortlocale=en_US     % locale of main language, for sorting
+  ,bibencoding=UTF8     % this is necessary only if bibliography file is in different encoding than main document
+]{biblatex}
+\addbibresource{bibliography.bib}
+
 
 %%% Basic information on the thesis
 
