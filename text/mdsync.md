@@ -259,20 +259,30 @@ At the beginning, they know nothing about each other's sets. We want to find a\ 
 that allows Alice to compute the set difference $A \setminus B$ and Bob to compute
 $B \setminus A$.
 
-There are several parameters by which to compare different protocols:
+For our use case, we shall assume that both sets $A$ and $B$ similar in size:
+$n := |A| ≈ |B|$, and significantly larger than their respective differences,
+which we shall for the sake of simplicity also consider similar in size:
+$n \gg c := |A \setminus B| ≈ |B \setminus A|$. The asymmetric case is not much
+more interesting. The number $c$ represents the number of "changes" (represented
+by new objects being created) made on one node that need to be synchronized
+to the other.
 
-  * Communication complexity, i.e., the total number of bits transferred
-    as a\ function of $\ell$, $|A|$, $|B|$ and $|A∩B|$.
+There are several ways of measuring the efficiency of different protocols, all
+expressed as a function of $n$, $c$, $\ell$, and any parameters of the protocol.
+
+  * Communication complexity, i.e., the total number of bits transferred in both
+    directions.
   * Number of rounds of communication. This is important because it determines
     the number of network round trips required. And especially in mobile networks,
     latency is often a greater concern than bandwidth -- the RTT on a 3G connection
     with suboptimal reception can be $500\,$ms or more.
-  * Computational complexity on each side. Because the sets in Filoco are large,
-    long-lived, stored on disk and updated in small increments, we do not want to
-    read the whole set during every reconciliation. Instead, we would like to
-    represent the set using an on-disk data structure that can efficiently answer queries
-    about the set needed by the reconciliation protocol. It should also be possible
-    to efficiently update this structure when new elements are added to the set.
+  * Computational complexity on each side. Without any precomputation, this would
+    have to be at least $Ω(n)$ because of the need to at least read the input sets.
+    As $n$ is presumed to be large compared to $c$ and the sets will probably be
+    stored on disk, we would prefer to have a data structure that can efficiently
+    answer queries about the set needed by the reconciliation protocol -- ideally
+    in a time dependent only on $c$ and not $n$ (or maybe on something like
+    $\log n$ at worst).
 
 ### Partition-based reconciliation
 
@@ -298,7 +308,7 @@ From this, a divide-and-conquer reconciliation algorithm is glaringly obvious
   \caption{Basic divide-and-conquer algorithm for set reconciliation
     \label{alg:recon1}}
   \begin{algorithmic}[1]
-    \Procedure{Recon1}{$A, i=\ell$}
+    \Procedure{Recon1}{$A, i=0$}
       \State $D_A \gets \textsc{Digest}(A)$
       \State \textsc{Send}($D_A$)
       \State $D_B \gets \textsc{Recv}()$\Comment{The other side's digest}
@@ -308,11 +318,11 @@ From this, a divide-and-conquer reconciliation algorithm is glaringly obvious
         \State \Return{$∅$}
       \ElsIf{$D_B = \textsc{Digest}(∅)$}
         \State \Return{$A$}\Comment{Other side's set is empty, need to send everything}
-      \ElsIf{$i=0$}
+      \ElsIf{$i=\ell$}
         \State \Return{$A$}
       \Else
-        \State $A_0 \gets \{ x ∈ A \:|\: x_{i-1} = 0 \}$\Comment{All the elements with $(i-1)$-th bit zero}
-        \State $A_1 \gets \{ x ∈ A \:|\: x_{i-1} = 1 \}$
+        \State $A_0 \gets \{ x ∈ A \:|\: x_i = 0 \}$\Comment{All the elements with $i$-th bit zero}
+        \State $A_1 \gets \{ x ∈ A \:|\: x_i = 1 \}$
         \State \Return{$\textsc{Recon1}(A_0, i-1) ∪ \textsc{Recon1}(A_1, i-1)$}
       \EndIf
     \EndProcedure
@@ -320,4 +330,49 @@ From this, a divide-and-conquer reconciliation algorithm is glaringly obvious
 \end{algorithm}
 
 This can be easily visualized if we look at the strings of each side as an (uncompressed)
-binary trie.
+binary trie. If $v_s$ is a vertex of the trie representing the prefix $s$, let $A_s$
+and $U_s$ denote the subsets of $A$, resp. $U$ restricted to elements with this prefix.
+
+Recursion then simply walks this trie. Both parties start in the root $v_ε$. If $A_ε=B_ε$,
+the sets are the same and algorithm ends. If $A_ε$ or $B_ε$, one side's set is empty and
+the other party has to send the whole set. In this case, recursion also stops at both sides.
+If $A_ε$ and $B_ε$ are nonempty and different, both sides recurse to $v_0$ and $v_1$. The
+same is repeated for every vertex visited. Only in case of a leaf, no recursion is done
+because each set contains at most one element so the set difference can be computed
+trivially.
+
+From this description it is also clear that the recursion tree looks exactly the same
+on both sides: Alice and Bob visit the same trie vertices in the same order; Alice
+recurses exactly when Bob recurses and stops recursion if and only if Bob stops recursion.
+Because of this, it is sufficient to send only the subset digests in the vertex visit order,
+without any further labelling.
+
+#### Complexity
+
+How does the protocol fare on the different complexity measurements? We recurse from
+vertex $v_s$ iff (1) there is at least one new leaf under this vertex in Alice's trie,
+(2) there is at least one leaf of any kind (new or old) under this vertex in Bob's trie
+(or vice versa). These events are independent. Let's examine the probability of the
+first condition $p_1 := P[|A_s \setminus B_s| ≥ 1]$. Because leaves are uniformly
+distributed, the expected number of new leaves under $v_s$ is $\E[|A_s \setminus B_s|]
+= c·|U_s|/|U| = c/2^d$, where $d$ is the depth of the vertex. By Markov's inequality,
+$p_1 = P[|A_s \setminus B_s| ≥ 1] ≤ \min(\E[|A_s \setminus B_s|], 1) = \min(c/2^d, 1)$.
+
+Similarly, we can estimate $p_2 := P[|B_s| ≥ 1] ≤ \min(n/2^d, 1)$. Therefore, the
+probability of recursing from a vertex is $p ≤ 2 p_1 p_2 ≤ 2\min(c/2^d, 1)\min(n/2^d, 1)$.
+We multiply by two because the new leaf can be on either side and we use the union bound.
+
+For the first $\lg c$ levels of the tree (which we shall call *slice I*), the estimated
+value of $p$ is 2, which we shall cap to 1. It thus expected that we visit all of the
+vertices on this level. The total expected number of vertices resursed from in the slice
+thus is $\E[K_{\mathrm{I}}] = 2^{\lg c+1} = 2c$.
+
+For the next $\lg n - \lg c$ levels (slice II), our estimate is $p ≤ 2 c/2^d$.
+The expected number of vertices visited on each of these levels is $\E[k_d] =
+2^d·p ≤ 2^d · 2c/2^d= 2c$.  Thus in total we expect to recurse from
+$\E[K_{\mathrm{II}}] ≤ 2c(\lg n - \lg c)$ vertices in total on these levels.
+
+For the remaining $\ell - \lg n$ levels (slice III) at the bottom of the tree, we estimate
+$p ≤ 2cn/2^{2d}$. Thence again, $\E[k_d] ≤ 2cn/2^d = 2c/2^{d'}$, where $d' := d - \lg n$
+is vertex depth measured from top of the slice. Totalling over the slice
+we get $\E[K_{\mathrm{III}}] =  2c(1 + 1/2 + 1/4 + \dots) < 4c$.
