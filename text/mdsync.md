@@ -224,20 +224,7 @@ differences:
 
 ### Working revisions
 
-
-### Local filesystem metadata
-
-### Metadata storage
-
-\TODO{Optimizations:}
-
-  * in general: prevent seeks between scanned inodes and db
-  * try fully in-memory db (tmpfs, cache changes?)
-  * WAL + synchronous=normal
-  * checkpoint interval
-  * larger transactions
-  * sqlite page cache size
-
+### Placeholders
 
 ## The Set Reconciliation Problem
 
@@ -265,23 +252,72 @@ Instead, we will use a stateless approach. We want a protocol that allows two no
 efficiently compute the intersection $O_A ∩ O_B$ without any prior mutual information
 ($A$ knows only $O_A$ and $B$ knows only $O_B$ at the start of the exchange).
 
-This is a known problem called the *Set Reconciliation Problem*. We will present several
-existing solutions (in roughly historical order) and one original solution to this problem.
-We will focus mostly on the properties and key ideas of individual protocols than on
-details of their implementation or proofs of correctness.
+This is a known problem called the *Set Reconciliation Problem* \cite{setrec}. It could
+be formally stated as follows. Let $U=\{0,1\}^\ell$ be a universe of $\ell$-bit strings
+for some fixed $\ell$. Alice has an arbitrary set $A ⊆ U$. Bob likewise has a set $B ⊆ U$. 
+At the beginning, they know nothing about each other's sets. We want to find a\ protocol
+that allows Alice to compute the set difference $A \setminus B$ and Bob to compute
+$B \setminus A$.
 
-We will be interested not only in the total amount of data exchanged by the protocols
-but also the number of exchanges (network roundtrips) required. This is interesting
-because often, especially on mobile networks, latency is a much greater issue than
-bandwidth.
+There are several parameters by which to compare different protocols:
 
-Furthermore, we shall assume that the set differences are usually small compared to
-the complete sets. This seems to be the typical case in file synchronization (you
-can have a million files on your disk but you usually touch only a few dozen in one
-day). Also, if for example 
+  * Communication complexity, i.e., the total number of bits transferred
+    as a\ function of $\ell$, $|A|$, $|B|$ and $|A∩B|$.
+  * Number of rounds of communication. This is important because it determines
+    the number of network round trips required. And especially in mobile networks,
+    latency is often a greater concern than bandwidth -- the RTT on a 3G connection
+    with suboptimal reception can be $500\,$ms or more.
+  * Computational complexity on each side. Because the sets in Filoco are large,
+    long-lived, stored on disk and updated in small increments, we do not want to
+    read the whole set during every reconciliation. Instead, we would like to
+    represent the set using an on-disk data structure that can efficiently answer queries
+    about the set needed by the reconciliation protocol. It should also be possible
+    to efficiently update this structure when new elements are added to the set.
 
-### Reconciliation Trees
+### Partition-based reconciliation
 
-### Invertible Bloom Filters
+A rather obvious solution to the set reconciliation problem
+and one of the first described \cite[alg. 3.1]{setrec} is a simple
+divide-and-conquer approach. First, let's assume that the elements in the sets
+to be from a uniform probability distribution. If they are not, we first process
+them by a hash function and apply the rest of the protocol on the result.
 
-### Our Approach
+First, we need a way to compare two sets $X$ and $Y$ possessed by Alice and Bob,
+respectivelly. This is simple: Alice computes a value $\textsc{Digest}(X)$
+representing the set. This value should be the same for equal sets and with high
+probability different for inequal sets. A simple implementation of \textsc{Digest}
+would be to compute a\ cryptographic hash of the concatenation of all the elements
+of $X$. Now simply Alice sends $\textsc{Digest}(X)$ to Bob and Bob sends
+$\textsc{Digest}(Y)$ to Alice. If they get a value equal to what they sent, the
+sets are the same.
+
+From this, a divide-and-conquer reconciliation algorithm is glaringly obvious
+(alg. \ref{alg:recon1}).
+
+\begin{algorithm}
+  \caption{Basic divide-and-conquer algorithm for set reconciliation
+    \label{alg:recon1}}
+  \begin{algorithmic}[1]
+    \Procedure{Recon1}{$A, i=\ell$}
+      \State $D_A \gets \textsc{Digest}(A)$
+      \State \textsc{Send}($D_A$)
+      \State $D_B \gets \textsc{Recv}()$\Comment{The other side's digest}
+      \If{$D_A=D_B$}
+        \State \Return{$∅$}
+      \ElsIf{$A = ∅$}
+        \State \Return{$∅$}
+      \ElsIf{$D_B = \textsc{Digest}(∅)$}
+        \State \Return{$A$}\Comment{Other side's set is empty, need to send everything}
+      \ElsIf{$i=0$}
+        \State \Return{$A$}
+      \Else
+        \State $A_0 \gets \{ x ∈ A \:|\: x_{i-1} = 0 \}$\Comment{All the elements with $(i-1)$-th bit zero}
+        \State $A_1 \gets \{ x ∈ A \:|\: x_{i-1} = 1 \}$
+        \State \Return{$\textsc{Recon1}(A_0, i-1) ∪ \textsc{Recon1}(A_1, i-1)$}
+      \EndIf
+    \EndProcedure
+  \end{algorithmic}
+\end{algorithm}
+
+This can be easily visualized if we look at the strings of each side as an (uncompressed)
+binary trie.

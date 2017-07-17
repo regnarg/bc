@@ -118,12 +118,20 @@ goals (in order of importance):
     can only relay updates made by trusted stores (and cryptographically signed
     by them), not make their own changes to the data. Any (meta)data received from
     and untrusted store must be cryptographically verified to have been originally
-    created by a trusted store. Otherwise, untrusted stores should be able to participate
+    created by a trusted store.
+    
+    Otherwise, untrusted stores should be able to participate
     in normal synchronization, exchanging encrypted (meta)data with other stores,
     both trusted and untrusted. This exchange should ideally be as efficient as
     (or close to) the unencrypted exchange between two trusted stores, including
     efficient incremental updates to encrypted files if possible (although this seems
     like a hard problem).
+    
+    This would allow using any untrustworthy cheap cloud storage
+    provider for additional storage, or as an intermediary for exchanging data
+    between nodes behind NAT. The untrusted store will not be able to
+    read nor modify your data. The only damage it can do is to delete your data,
+    which can be alleviated by redundant storage on different stores.
 
 Explicit non-goals include fancy GUIs and beginner-friendliness. Users are expected
 to have at least a basic understanding of Filoco's internals to make full use of it.

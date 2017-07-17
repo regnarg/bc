@@ -613,7 +613,7 @@ Thus the first online monitoring API turned up to be more useful for offline mon
 whose problems it can fix with negligible slowdown.
 
 However, for regular long-term monitoring, the requirement of a minute-long scan with
-100$\,$ disk load (during which your system will be rather slow) will be unpleasant.
+100$\,\%$ disk load (during which your system will be rather slow) will be unpleasant.
 We do not want to end up like many Windows users who have to wait a minute or more after
 login for all the accumulated autostart programs to load before their system becomes
 usable.
