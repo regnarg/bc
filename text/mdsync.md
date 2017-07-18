@@ -353,12 +353,12 @@ How does the protocol fare on the different complexity measurements? We recurse 
 vertex $v_s$ iff (1) there is at least one new leaf under this vertex in Alice's trie,
 (2) there is at least one leaf of any kind (new or old) under this vertex in Bob's trie
 (or vice versa). These events are independent. Let's examine the probability of the
-first condition $p_1 := P[|A_s \setminus B_s| ≥ 1]$. Because leaves are uniformly
+first condition $p_1 := \P[|A_s \setminus B_s| ≥ 1]$. Because leaves are uniformly
 distributed, the expected number of new leaves under $v_s$ is $\E[|A_s \setminus B_s|]
 = c·|U_s|/|U| = c/2^d$, where $d$ is the depth of the vertex. By Markov's inequality,
-$p_1 = P[|A_s \setminus B_s| ≥ 1] ≤ \min(\E[|A_s \setminus B_s|], 1) = \min(c/2^d, 1)$.
+$p_1 = \P[|A_s \setminus B_s| ≥ 1] ≤ \min(\E[|A_s \setminus B_s|], 1) = \min(c/2^d, 1)$.
 
-Similarly, we can estimate $p_2 := P[|B_s| ≥ 1] ≤ \min(n/2^d, 1)$. Therefore, the
+Similarly, we can estimate $p_2 := \P[|B_s| ≥ 1] ≤ \min(n/2^d, 1)$. Therefore, the
 probability of recursing from a vertex is $p ≤ 2 p_1 p_2 ≤ 2\min(c/2^d, 1)\min(n/2^d, 1)$.
 We multiply by two because the new leaf can be on either side and we use the union bound.
 
@@ -446,5 +446,137 @@ because they contain no changes), one for each change. Slice III contains
 short tails of these paths (expected length bounded by a constant) before recursion
 terminates.
 
-This seems rather wasteful. Most of the algortihm is spent walking around the paths
+This seems rather wasteful. Most of the algortihm is spent walking along the paths
 in slice II, always comparing digests of sets that differ by only one element.
+
+What we would like is to be able to immediately detect that two sets differ only
+in one element and ideally also reconstruct that element. The XOR function immediately
+springs to mind. We can define the digest as
+$$\textsc{Digest}(\{a_1, …, a_k\}) := h(a_1) ⊕ \dotsm ⊕ h(a_k),$$
+where $h$ is a cryptographic hash function. We need $h$ because if we XORred the original
+strings
+(which determine trie location), digests of neighbouring nodes would be highly correlated.
+
+Now when we have two sets $A$ and $B$ such that $A ∆ B = \{e\}$ then $δ :=
+\textsc{Digest}(A) ⊕ \textsc{Digest}(B) = h(e)$. However if $|A ∆ B| > 1$, the
+$δ$ a useless number. We need to determine which of these cases ocurred. The
+party with the extra element can simply look up $δ$ in a reverse lookup table
+$h(x) → x$.
+
+However, this might yield a false positive. What is the probability of that happening?
+Because we presume values of $h$ to behave as independent uniformly distributed random
+variables, the digests of any two sets differing in at least one element should behave
+as independent random uniformly distributed random variables. Thus the probability of
+a accidental collision of $δ$ for a nontrivial difference with one specific element
+is close to $1/2^g$, where $g$ is the digest size. The probability of collision with any
+element can be estimated using the union bound as $p ≤ n/2^g$. If we want this to be
+as collision-resistant as a $g$-bit hash function, we need to use a longer hash, specifically
+one with $g' := g + \lg n$ bits.
+
+If the extra element is on the other side, we must recurse for now and the other party
+will inform us in the next round that we should stop any further recursion.
+
+There is an alternative to simply using a longer hash function, and that is to add
+a checksum to each element's hash as follows:
+$$\textsc{ElemDigest}(x) := h(x) \,\|\, h(h(x)),$$
+$$\textsc{Digest}(\{a_1, …, a_k\}) := \textsc{ElemDigest}(a_1) ⊕ \dotsm ⊕ 
+\textsc{ElemDigest}(a_k).$$
+
+
+This brings the same level of fake positive resistance (probability $1/2^g$ per
+comparison) at the cost of more extra bits ($g$ instead of $\lg n$). However, now
+both parties can independently detect that $|A ∆ B|=1$ by checking if
+$h(δ_1) = δ_2$ (where $δ_1$ and $δ_2$ are the two halves of the $δ$ string)
+and stop recursion immediately.
+This saves one roundtrip and simplifies implementation. It is not clear which approach
+is better, both have their mertis.
+
+The second variant (with another checksum hash) is summarized as algorithm
+\ref{alg:recon2} and implemented in Filoco.
+
+\begin{algorithm}
+  \caption{Divide-and-conquer set reconciliation with pruning
+    \label{alg:recon2}}
+  \begin{algorithmic}[1]
+    \Procedure{Digest}{$A$}
+      \State \Return{$h(A)\,\|\,h(h(A))$}
+    \EndProcedure
+    \Procedure{Recon2}{$A, i=0$}
+      \State $D_A \gets \textsc{Digest}(A)$
+      \State \textsc{Send}($D_A$)
+      \State $D_B \gets \textsc{Recv}()$
+      \State $\delta \gets D_A ⊕ D_B$
+      \State split $\delta$ into two halves $\delta_1$ and $\delta_2$
+      \If{$D_A=D_B$}
+        \State \Return{$∅$}
+      \ElsIf{$A = ∅$}
+        \State \Return{$∅$}
+      \ElsIf{$D_B = \textsc{Digest}(∅)$}
+        \State \Return{$A$}\Comment{other side's set is empty, need to send everything}
+      \ElsIf{$h(δ_1) = δ_2$}\Comment{$|A △ B| = 1$}
+        \If{$∃ x ∈ A$ with $h(x)=δ_1$}\Comment{we have the extra element}
+          \State \Return{$\{x\}$}
+        \Else\Comment{they have the extra element}
+          \State \Return{$∅$}
+        \EndIf
+      \ElsIf{$i=\ell$}
+        \State \Return{$A$}
+      \Else
+        \State $A_0 \gets \{ x ∈ A \:|\: x_i = 0 \}$\Comment{All the elements with $i$-th bit zero}
+        \State $A_1 \gets \{ x ∈ A \:|\: x_i = 1 \}$
+        \State \Return{$\textsc{Recon2}(A_0, i-1) ∪ \textsc{Recon2}(A_1, i-1)$}
+      \EndIf
+    \EndProcedure
+  \end{algorithmic}
+\end{algorithm}
+
+
+#### Complexity
+
+Intuitively, pruning should cut off all the boring branches in slices II and III and
+leave us with $\lg c$ expected roundtrips. Let's prove that.
+
+<!-- In the pruning version, we recurse from a vertex only if there are at least two changes
+(in total on both sides) underneath it. There are a few other conditions (for example,
+recursion stops if the subset on one side is empty, even if the other party has two
+changes), which we shall ignore because we are doing an upper bound.
+
+The probability at least two changes are found under a vertex can again be estimated
+using Markov's inequality: $\P[|A_s △ B_s| ≥ 2 ] ≤ \min(\E[|A_s △ B_s|]/2, 1) =
+\min(2c/2^d/2, 1) = \min(c/2^d, 1)$.
+The arguments are mostly the same as in the previous section. There are $2c$ total changes,
+we assume them to be independent and uniformly distributed, wherefrom the expected count
+is straightforward. Just as a reminder, $d$ is the depth of the examined vertex from the root.
+-->
+
+We will have to use a slightly different estimation method. The recursion tree
+has at most $c$ leaves, with one change under each. For each change $w$ (a trie
+leaf present on one side but not other), we shall estimate the length of the
+recursion branch leading to that node.  We shall consider all the trie
+ancestors of the change and for each of them compute the probability that we
+recursed from that vertex.
+
+We recurse from a vertex only if there are at least two changes (in total on
+both sides) underneath it. There are a few other conditions (for example,
+recursion stops if the subset on one side is empty, even if the other party has
+two changes), which we shall ignore because we are doing an upper bound. This
+means that at least one of the $2c-1$ changes other than the one we are
+currently examining must lie under this vertex. Because we consider changes to
+be independent and uniformly distributed, the probability of this happening
+can be easily estimated, once again using Markov's inequality:
+$$p_d := \P[|A_s △ B_s|- \{w\}] ≤ \min(\E[|A_s △ B_s|- \{w\}],1)
+= \min(\E[|A_s △ B_s|]- 1, 1) =$$
+$$= \min(c/2^d - 1, 1) ≤ \min(c/2^d, 1),$$
+where $d$ is the depth of the ancestor.
+
+Let's look at the values of $p_d$ by slice. In slice I, $2^d ≤ c$ and the estimate
+maxes out at 1. For slices II and III, we get $p_d \ge c/2^d = 1/2^{d'}$, where
+$d' := d - \lg c$ is depth relative to the top of slice II. Now we can easily estimate
+the length of a recursion tree branch:
+$$\E[L_w] ≤ ∑_{d=0}^\ell p^d = \lg c + 1 + 1/2 + 1/4 + \dots ≤ 2 + \lg c.$$
+The expected number total number of vertices recursed from is bounded by the sum
+of the recursion branch lengths (we count many vertices several times), which we
+can estimate using linearity of expectation):
+$$\E[K] ≤ \E\left[∑_{w ∈ A △ B} L_w\right] = ∑_{w ∈ A △ B} \E[L_w] ≤ 2c·(2 + \lg c) = 4c + 2c\lg c.$$
+
+

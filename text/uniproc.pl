@@ -51,6 +51,7 @@ s/≥/\\geq/g;
 
 s/∂/\\partial/g;
 s/∆/\\triangle/g;
+s/△/\\triangle/g;
 
 s/∑/\\sum/g;
 s/Π/\\prod/g;
