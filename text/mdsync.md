@@ -91,7 +91,7 @@ The following types of objects currently exist:
 
     The ID of a FOV is a cryptographic hash of all the above fields. Because
     those also include parent FOV IDs (which are in turn hashes of parent FOVs),
-    the FOVs form a Merkle tree\TODO{link?}. This ensures integrity of revision
+    the FOVs form a Merkle tree \cite{merkle}. This ensures integrity of revision
     history and prevents a compromised node from rewriting it without notice.
 
   * \TODO{A **storage record (SR)**.}
@@ -284,7 +284,7 @@ expressed as a function of $n$, $c$, $\ell$, and any parameters of the protocol.
     in a time dependent only on $c$ and not $n$ (or maybe on something like
     $\log n$ at worst).
 
-### Partition-based reconciliation
+### Divide and conquer
 
 A rather obvious solution to the set reconciliation problem
 and one of the first described \cite[alg. 3.1]{setrec} is a simple
@@ -363,11 +363,11 @@ probability of recursing from a vertex is $p ≤ 2 p_1 p_2 ≤ 2\min(c/2^d, 1)\m
 We multiply by two because the new leaf can be on either side and we use the union bound.
 
 For the first $\lg c$ levels of the tree (which we shall call *slice I*), the estimated
-value of $p$ is 2, which we shall cap to 1. It thus expected that we visit all of the
-vertices on this level. The total expected number of vertices resursed from in the slice
-thus is $\E[K_{\mathrm{I}}] = 2^{\lg c+1} = 2c$.
+value of $p$ is 2, which we shall cap to 1. We expect the recursion tree in this slice
+to be very close to a full binary tree. The total expected number of vertices recursed
+from in the slice thus is $\E[K_{\mathrm{I}}] ≤ 2^{\lg c+1} = 2c$.
 
-For the next $\lg n - \lg c$ levels (slice II), our estimate is $p ≤ 2 c/2^d$.
+For the next $(\lg n - \lg c)$ levels (slice II), our estimate is $p ≤ 2 c/2^d$.
 The expected number of vertices visited on each of these levels is $\E[k_d] =
 2^d·p ≤ 2^d · 2c/2^d= 2c$.  Thus in total we expect to recurse from
 $\E[K_{\mathrm{II}}] ≤ 2c(\lg n - \lg c)$ vertices in total on these levels.
@@ -375,4 +375,76 @@ $\E[K_{\mathrm{II}}] ≤ 2c(\lg n - \lg c)$ vertices in total on these levels.
 For the remaining $\ell - \lg n$ levels (slice III) at the bottom of the tree, we estimate
 $p ≤ 2cn/2^{2d}$. Thence again, $\E[k_d] ≤ 2cn/2^d = 2c/2^{d'}$, where $d' := d - \lg n$
 is vertex depth measured from top of the slice. Totalling over the slice
-we get $\E[K_{\mathrm{III}}] =  2c(1 + 1/2 + 1/4 + \dots) < 4c$.
+we get $\E[K_{\mathrm{III}}] =  2c(1 + 1/2 + 1/4 + \dots) < 4c$. In this slice even
+elements common to $A$ and $B$ are becoming increasingly sparse so any recursion
+soon dies out because it hits an empty set on the other side.
+
+The total expected number of vertices recursed from is simply $\E[K] = \E[K_{\mathrm{I}}] 
++ \E[K_{\mathrm{II}}]  + \E[K_{\mathrm{III}}]  ≤ 2c + 2c(\lg n - \lg c) + 4c
+= 6c + 2c(\lg n - \lg c)$. The total number of vertices visited is simply twice this
+number, i.e., $12c + 4c(\lg n - \lg c)$ and the total number of bytes transmitted
+is $cg(3 + \lg n - \lg c)$, where $g$ is the digest size (we send two $g/8$-byte
+digests per visited vertex).
+
+For a realistic example with $n=2^{20}$, $c=1024$, and $g = 128$, we would get
+$128(3 + 20 - 10) = 1664\,\mathrm{kB}$  transferred, that is approx. 800 bytes per change
+(remember there are really $2c$ total changes).
+
+We can estimate the number of communication rounds in a similar fashion.
+We know an upper bound on the expected number of vertices $\E[k_d]$ visited on each
+level of the tree. From this, we can once again use Markov's inequality to estimate
+the probability as least one vertex is visited on that level. The expected number
+of rounds is then simply the expected number of levels on which ve visit at least
+one vertex. We will do this again per slice.
+
+For slice I, we expect to visit all levels, i.e. $r_{\mathrm{I}} ≤ \lg c$.
+For slice II, $\E[k_d] = 2c > 1$, so again we expect to visit all levels,
+$\E[r_\mathrm{II}] ≤ \lg n - \lg c$. With slice III, we are finally getting
+somewhere. We have shown that $\E[k_d] ≤  2c/2^{d'}$, where $d'$ is vertex
+depth relative to the top of slice III. Thus the probability
+of visiting at least one vertex on a level is bounded by $\min(2c/2^{d'}, 1)$.
+For $d' ≤ 1+\lg c$, this bound is equal to one. For all the subsequent levels,
+the probabilities form the geometric sequence with sum $1+1/2+1/4+… < 2$. Thus
+the expected number of levels visited $\E[r_\mathrm{III}] ≤ 3+\lg c$.
+
+When we put this together, we can bound the expected number of communication
+rounds by $\E[r] = \E[r_\mathrm{I}] + \E[r_\mathrm{II}] + \E[r_\mathrm{III}] ≤
+3 + \lg n + \lg c$. With the example parameters above, this would be 33 roundtrips.
+On a higher-latency network with RTT $250\,$ms, this would make the synchronization
+time at least 8 seconds. Aven for a silngle change, this will still be 23 roundtrips
+or almost 6 seconds (though this is only an upper bound).
+
+If we use the naive digest function suggested in above, computional complexity
+will be simply too horrendous to be even worth estimating, definitely at least $Ω(n)$.
+Instead, we can make the trie on each side into a Merkle tree \cite{mtree}: we define
+the digest of any nonempty set $A_s$ corresponding to vertex $v_s$ as a cryptographic
+hash of the two child sets in the trie ($\|$ is the string concatenation operator):
+$$\textsc{Digest}(A_s) := \begin{cases}
+0\dotsm0 &\text{if }A_s = Ø\\
+\textsc{Hash}(\textsc{Digest}(A_{s\, \| \,0})\, \| \,
+              \textsc{Digest}(A_{s\,\|\,1}))&\text{otherwise}
+\end{cases}$$
+
+We can store digests for all non-empty vertices on disk in a key-value database.
+Then computing a digest is a constant time operation (we simply read it from
+disk) and the expected computational complexity is the number of vertices visited,
+i.e., $\OO(c\log n)$.
+Adding a new object to the set takes time $\OO(\ell)$ because we need to update
+the stored digests of all its ancestors.
+
+### Divide and conquer with pruning
+
+From the estimates given in the previous section, we can infer that the recursion
+tree looks approximately as shown in [@fig:rectree] for $c=4$ (4 new objects on
+each side, 8 changes total).
+
+![Recursion tree of \textsc{Recon1} (algorithm \ref{alg:recon1})](img/rectree.pdf){#fig:rectree}
+
+Slice I is (close to) a full binary tree, slice II consists of mostly of separate
+non-branching paths (except for dead-end side branches that immediately terminate
+because they contain no changes), one for each change. Slice III contains
+short tails of these paths (expected length bounded by a constant) before recursion
+terminates.
+
+This seems rather wasteful. Most of the algortihm is spent walking around the paths
+in slice II, always comparing digests of sets that differ by only one element.
