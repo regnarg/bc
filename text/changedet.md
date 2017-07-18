@@ -449,17 +449,15 @@ scanning the whole filesystem is not one of them.
 
 Not all filesystems are like this. For example, NTFS keeps all file metadata in
 one contiguous region called the Master File Table (MFT) at the beginning of the
-partition. This allows the existence of tools like SwiftSearch \TODO{link}  that
+partition. This allows the existence of tools like SwiftSearch[^ss]  that
 read and parse the whole raw MFT in several seconds (bypassing the operating
 system) and then allow instantaneous searches for any file by name, no previous
 indexing required.
 
-\TODO{explore packed\_meta\_block mke2fs option}
+[^ss]: \url{https://sourceforge.net/projects/swiftsearch/}
 
 Nothing like this can be done for ext4. Just reading all the raw inode regions
-will include a lot of seeks and takes tens of seconds to minutes, as seen in the
-table below.
-
+will include a lot of seeks and takes tens of seconds to minutes.
 
 In ext4 and many other filesystems, the inode number directly corresponds to
 the location of the inode structure on disk. Because of the block group
@@ -487,15 +485,15 @@ This way, we access only inode metadata blocks (the gray areas in [@fig:bg]) and
 not directory content blocks, which are stored in the white data sections. This
 further reduces seeking.
 
-Order    Access by      Test 1
--------  -------------  -------
-scan     path           \TODO{}
-         handle         \TODO{}
-inode    path           \TODO{}
-         handle         \TODO{}
-random   path           \TODO{}
-         handle         \TODO{}
--------  -------------  -------
+Order    Access by       Time [s]
+-------  -------------  ---------
+inode    path                74.7
+         handle              82.2
+scan     path               108.3
+         handle             254.9
+find     path               281.0
+random   path               694.8
+-------  -------------  ---------
 
 : Scan times for different access strategies. {#tbl:scantimes}
 
@@ -504,7 +502,8 @@ the inodes on a filesystem for different access orders (*scan* is the order
 of a depth-first traversal that visits children in the order returned by
 `getdents`, *inode* is ascending inode number order and *random* is a completely
 random shuffle of all the inodes) and different access methods (by path or
-by handle).
+by handle). The measurement was performed on a real-world filesystem with
+approximately 2 million inodes, $10\,%$ of which were directories.
 
 We experimented with several other techniques, for example massively
 parallelizing the scan in the hope that the kernel and/or hard disk controller

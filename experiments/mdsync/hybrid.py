@@ -8,7 +8,7 @@ import hashlib
 from math import *
 from time import time
 
-##seed(42)
+seed(42)
 
 debug = lambda *a: None
 verbose = lambda *a: None
@@ -97,8 +97,9 @@ class HybridTree:
     def __contains__(self, key):
         return h1(key) in self.T1
 
-SIZE = 10**5
-CHANGES = 10000
+SIZE = 2**20
+CHANGES = 1024
+ONEDIFF_OPT = False
 
 async def endpoint(H, rx, tx, archive):
     lvl_alive = [1]
@@ -106,7 +107,7 @@ async def endpoint(H, rx, tx, archive):
     to_send = []
     send_subtree = []
     while lvl_alive:
-        debug("Level %d, alive %r" % (level, lvl_alive))
+        #debug("Level %d, alive %r" % (level, lvl_alive))
         sent = { idx: (H.T1.data[idx], H.T2.data[idx]) for idx in lvl_alive }
         archive.append(sent)
         await tx.put(sent)
@@ -115,7 +116,7 @@ async def endpoint(H, rx, tx, archive):
         for vert in set(sent.keys()) | set(recv.keys()):
             my_val, my_chk = sent.get(vert, (0,0))
             their_val, their_chk = recv.get(vert, (0,0))
-            verbose("Vert %d: my %x/%x, their %x/%x" % (vert, my_val, my_chk, their_val, their_chk))
+            #verbose("Vert %d: my %x/%x, their %x/%x" % (vert, my_val, my_chk, their_val, their_chk))
             if my_val == 0 and my_chk == 0: continue # subtree empty, nothing to send
             if their_val == 0 and their_chk == 0: # they have nothing, send whole subtree, no need to recurse
                 send_subtree.append(vert)
@@ -124,7 +125,7 @@ async def endpoint(H, rx, tx, archive):
             if my_val == their_val and my_chk == their_chk:
                 continue # no changes
 
-            if h2(my_val ^ their_val) == my_chk ^ their_chk: # only single chnage in subtree
+            if (ONEDIFF_OPT or level == LEVELS-1) and h2(my_val ^ their_val) == my_chk ^ their_chk: # only single chnage in subtree
                 extra_val = my_val ^ their_val
                 if extra_val in H: # if we have the extra object, send it
                     to_send.append(extra_val)
@@ -154,7 +155,8 @@ async def endpoint(H, rx, tx, archive):
         
 def xfer_stat(archive):
     # Each vertex containss 2 128b numbers
-    return (16*2) * sum( [ len(msg) for msg in archive ] )
+    record = 16*2 if ONEDIFF_OPT else 16
+    return record * sum( [ len(msg) for msg in archive ] )
 
 def reconcile(A, B):
     ab_archive = []

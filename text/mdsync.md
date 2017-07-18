@@ -276,13 +276,18 @@ expressed as a function of $n$, $c$, $\ell$, and any parameters of the protocol.
     the number of network round trips required. And especially in mobile networks,
     latency is often a greater concern than bandwidth -- the RTT on a 3G connection
     with suboptimal reception can be $500\,$ms or more.
-  * Computational complexity on each side. Without any precomputation, this would
+  * Computational time on each side. Without any precomputation, this would
     have to be at least $Ω(n)$ because of the need to at least read the input sets.
     As $n$ is presumed to be large compared to $c$ and the sets will probably be
     stored on disk, we would prefer to have a data structure that can efficiently
     answer queries about the set needed by the reconciliation protocol -- ideally
     in a time dependent only on $c$ and not $n$ (or maybe on something like
     $\log n$ at worst).
+
+We will be primarily interested in the expected (as opposed to worst-case) values
+of these complexities. This is because the elements in our sets are random
+(either pseudorandomly generated or cryptographic hashes) and we only communicate
+with authorized peers so we do not have to worry about adversarial inputs.
 
 ### Divide and conquer
 
@@ -349,6 +354,8 @@ without any further labelling.
 
 #### Complexity
 
+##### Communication complexity
+
 How does the protocol fare on the different complexity measurements? We recurse from
 vertex $v_s$ iff (1) there is at least one new leaf under this vertex in Alice's trie,
 (2) there is at least one leaf of any kind (new or old) under this vertex in Bob's trie
@@ -390,8 +397,10 @@ For a realistic example with $n=2^{20}$, $c=1024$, and $g = 128$, we would get
 $128(3 + 20 - 10) = 1664\,\mathrm{kB}$  transferred, that is approx. 800 bytes per change
 (remember there are really $2c$ total changes).
 
+##### Communication rounds
+
 Now we would like to estimate the number of communication rounds. If the algorithm
-were implemented as described in algorithm \ref{recon1}, each visited vertex would
+were implemented as described in algorithm \ref{alg:recon1}, each visited vertex would
 cost us one round. However, the algorithm can be easily modified to perform
 a breadth-first traversal of the original recursion tree. Then we can send
 digests from all active vertices on a given level in a single round and the number
@@ -456,6 +465,8 @@ On a higher-latency network with RTT $250\,$ms, this would make the synchronizat
 time at least 8 seconds. Aven for a silngle change, this will still be 23 roundtrips
 or almost 6 seconds (though this is only an upper bound).
 
+##### Computational time
+
 If we use the naive digest function suggested in above, computional complexity
 will be simply too horrendous to be even worth estimating, definitely at least $Ω(n)$.
 Instead, we can make the trie on each side into a Merkle tree \cite{mtree}: we define
@@ -467,12 +478,14 @@ $$\textsc{Digest}(A_s) := \begin{cases}
               \textsc{Digest}(A_{s\,\|\,1}))&\text{otherwise}
 \end{cases}$$
 
-We can store digests for all non-empty vertices on disk in a key-value database.
-Then computing a digest is a constant time operation (we simply read it from
-disk) and the expected computational complexity is the number of vertices visited,
-i.e., $\OO(c\log n)$.
-Adding a new object to the set takes time $\OO(\ell)$ because we need to update
-the stored digests of all its ancestors.
+We can store digests for all non-empty vertices on disk.
+This allows us to get any digest in $\OO(1)$ expected time if we use a hashed store 
+or $\OO(\lg n)$ worst-case time if we use a tree-based structure (e.g. a typical
+SQL database with B-tree based indices, which is the case for the SQLite database
+used by Foloco). For an tree-based database, we get total computational time
+$\OO(c \lg^2 n)$ for one reconciliation.
+When adding a new object to the set, we must update the hashes of all of its $\ell$
+ancestors, which can be done in time $\OO(\ell\lg n)$.
 
 ### Divide and conquer with pruning
 
@@ -572,11 +585,17 @@ The second variant (with another checksum hash) is summarized as algorithm
   \end{algorithmic}
 \end{algorithm}
 
+A similar approach has been independently discovered earlier by Minsky and Trachtenberg
+\cite{partrecon}. They use a scheme based on polynomials over finite fields for pruning
+branches where the symmetric difference is small. Our solution achieves comparable
+asymptotic bounds and practical results (even though perhaps with worse constant factors)
+and is much simpler both conceptually and to implement.
 
 #### Complexity
 
 Intuitively, pruning should cut off all the boring branches in slices II and III and
-leave us with $\lg c$ expected roundtrips. Let's prove that.
+leave us with $\OO(\lg c)$ expected depth of the recursion tree, which corresponds to
+communication complexity $\OO(c\lg c)$. Let's prove that.
 
 <!-- In the pruning version, we recurse from a vertex only if there are at least two changes
 (in total on both sides) underneath it. There are a few other conditions (for example,
@@ -590,6 +609,8 @@ The arguments are mostly the same as in the previous section. There are $2c$ tot
 we assume them to be independent and uniformly distributed, wherefrom the expected count
 is straightforward. Just as a reminder, $d$ is the depth of the examined vertex from the root.
 -->
+
+##### Communication complexity
 
 We will have to use a slightly different estimation method. The recursion tree
 has at most $c$ leaves, with one change under each. For each change $w$ (a trie
@@ -623,6 +644,8 @@ $$\E[K] ≤ \E\left[∑_{w ∈ A △ B} L_w\right] = ∑_{w ∈ A △ B} \E[L_w]
 (we send two hash values per vertex, there are at most twice as many vertices visited
 as recursed from).
 
+##### Communication rounds
+
 In a similar manner, we can estimate the number of communication rounds,
 again presuming this algorithm is first transformed to a breadth-first
 version in a manner similar to algorithm \ref{alg:recon1b}. The modified
@@ -639,3 +662,77 @@ depth of the recursion tree is $\E[r] = 1 + 2\lg c + 1 + 1/2 + 1/4 + \dots < 3 +
 This is the number of communication rounds required by the breadth-first variant of
 algorithm \ref{alg:recon2}.
 
+##### Computational time
+
+As for computational time, we can once again organize the digests into
+a Merkle-like tree stored on disk and incrementally updated. Only this time each
+vertex computes a XOR instead of a cryptographic hash. Thus we get the same
+$\OO(\lg n)$ query time and $\OO(\ell \lg n)$ update time. The total
+computational time is then $\OO(c\lg c\lg n)$.
+
+As a further optimization, we notice that if the $\ell$ is larger than $2 \lg n$,
+the bottom levels will be rarely ever used during synchronization. We can thus
+further optimize by only storing the to $α\lg n$ for an empirically chosen constant
+$1 ≤ α ≤ 2$. The missing levels can be computed on-the-fly (for example if
+the set items are stored in a SQL database that supports range queries, we can simply
+enumerate all the elements under a vertex because they form a contigous segment).
+
+This changes storage requirements to $\OO(n\lg n)$ and update time to $\OO(\lg^2 n)$.
+
+For clarity, we summarize the efficiency of both algorithms in [@tbl:setrec-comp]
+(for 128-bit digests).
+
+Experimental results were produced by the
+`experiments/mdsync/hybrid.py` script in attachment 1. This script simply generates
+a set of $2^{20}$ random 128-bit numbers, copies it and then makes `CHANGES` changes
+in each copy and simulates the reconciliation protocol. It can be configured
+by editing the variables
+`SIZE`, `CHANGES` and `ONEDIFF_OPT`. `ONEDIFF_OPT` decides whether the pruning
+optimization is used. We use the XOR-based digest even for the non-pruning
+version but we do not count the additional checksum part as transferred bytes
+and otherwise the algorithms should have very similar properties. Beware that
+this is an inefficient Python script that stores everything memory. At least
+$16\,$GB RAM is recommended for running it and it may take a few minutes.
+
+The "total roundtrip time" and "total transfer time" are synchronization time
+estimates based on roundtrip numbers and transfer total from experimental protocol
+simulations (no actual time measurements were performed). These are computed for
+a hypothetical low-quality network with $1\,$Mbps symmetric throughput and $500\,$ms RTT
+(for example a 3G connection with subpar reception). Please note
+that because of interleaved communication in both directions, the actual number
+of network roundtrips needed is half the number of communication rounds (recursion
+tree depth). The total synchronization time will be probably be close to the maximum
+of the two estimates.
+
+Metric                                              Naive D\&C              Pruning D\&C
+---------------------------------  ---------------------------  ------------------------
+total bytes transferred            $128c(3 + \lg n - \lg c)$    $128c(2 + \lg c)$
+$\quad$ for $n=2^{20}$             $128c(23 - \lg c)$           $128c(2 + \lg c)$
+$\qquad$ for $c=16$ (theor.)       $38\,$kB ($1.2\,$kB p.ch.)   $12\,$kB ($354\,$B p.ch.)
+$\qquad$ for $c=16$ (exper.)       $51\,$kB ($1.6\,$kB p.ch.)   $11.1\,$kB ($354\,$B p.ch.)
+$\qquad$ for $c=1024$ (theor.)     $1.6\,$MB ($0.8\,$kB p.ch.)  $1.5\,$MB ($1.5\,$kB p.ch.)
+$\qquad$ for $c=1024$ (exper.)     $1.6\,$MB ($0.8\,$kB p.ch.)  $651.1\,$kB ($325\,$B p.ch.)
+communication rounds               $3 + \lg n + \lg c$          $3 + 2\lg c$                       
+$\quad$ for $n=2^{20}$             $23 + \lg c$                 $3 + 2\lg c$                       
+$\qquad$ for $c=16$ (theor.)       27                           11
+$\qquad$ for $c=16$ (exper.)       8                            4
+$\qquad$ for $c=1024$ (theor.)     33                           23
+$\qquad$ for $c=1024$ (exper.)     9                            8
+computational time                 $\OO(c\lg^2 n)$              $\OO(c\lg c\lg n)$
+disk storage                       $\OO(n\lg |U|)$              $\OO(n\lg |U|)$
+update time                        $\OO(\lg |U|\lg n)$          $$\OO(\lg^2 n)$$
+total roundtrip time (proj.)
+$\qquad$ for $c=16$                $2\,$s                       $1\,$s
+$\qquad$ for $c=1024$              $2.25\,$s                    $2\,$s
+total transfer time (proj.)
+$\qquad$ for $c=16$                $0.4\,$s                     $0.08\,$s
+$\qquad$ for $c=1024$              $12.8\,$s                    $5.2\,$s
+---------------------------------  ---------------------------  ------------------------
+
+: Comparison of described set reconciliation algorithms {#tbl:setrec-comp}
+
+In the model situation of $n=2^20$ and $c=16..1024$, both algorithms seems comparable
+within a factor of two, both theoretically and experimentally. Both seem usable for our
+application. However, the pruning algorithm performs better, is only slightly
+more complex and offers much greater scalability because its parameters do not depend
+on $n$.
