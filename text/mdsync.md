@@ -390,7 +390,46 @@ For a realistic example with $n=2^{20}$, $c=1024$, and $g = 128$, we would get
 $128(3 + 20 - 10) = 1664\,\mathrm{kB}$  transferred, that is approx. 800 bytes per change
 (remember there are really $2c$ total changes).
 
-We can estimate the number of communication rounds in a similar fashion.
+Now we would like to estimate the number of communication rounds. If the algorithm
+were implemented as described in algorithm \ref{recon1}, each visited vertex would
+cost us one round. However, the algorithm can be easily modified to use a breadth-first
+traversal of the trie instead of recursive depth-first traversal. Then we can send
+digests from all active vertices on a given level in a single round. This modification
+is shown as algorithm \ref{recon1b}. It should be easy to see that this algorithm
+straightforwardly maps to the original.
+
+\begin{algorithm}
+  \caption{Breadth-first modification of the divide-and-conquer reconciliation algorithm
+    \label{alg:recon1b}}
+  \begin{algorithmic}[1]
+    \Procedure{Recon1-BFS}{$A$}
+      \State $active \gets [ε]$\Comment{ordered list of active vertices on cur. level}
+      \State $C \gets ∅$\Comment{the local changes ($A \setminus B$)}
+      \While{$active ≠ []$}
+        \State $d_A \gets \left[\, \textsc{Digest}(A_s) \,|\, s ∈ active \,\right]$
+        \State \textsc{Send}($\|\,d_A $)\Comment{concatenation of all active vertices' digests}
+        \State $d_B \gets \textsc{Recv}()$ split into digest-sized chunks
+        \State $next \gets []$
+        \For{$0 ≤ i < |active|$}
+          \If{$d_A[i]=d_B[i]$}
+            \State do nothing
+          \ElsIf{$A_s = ∅$}
+            \State do nothing
+          \ElsIf{$D_B = \textsc{Digest}(∅)$}
+            \State $C \gets C ∪ A_s$
+          \ElsIf{$i=\ell$}
+            \State $C \gets C ∪ A_s$
+          \Else
+            \State append $s\,\|\,0$ and $s\,\|\,1$ to $next$
+          \EndIf
+        \EndFor
+        \State $active \gets next$
+      \EndWhile
+      \State \Return{$C$}
+    \EndProcedure
+  \end{algorithmic}
+\end{algorithm}
+
 We know an upper bound on the expected number of vertices $\E[k_d]$ visited on each
 level of the tree. From this, we can once again use Markov's inequality to estimate
 the probability as least one vertex is visited on that level. The expected number
@@ -579,4 +618,4 @@ of the recursion branch lengths (we count many vertices several times), which we
 can estimate using linearity of expectation):
 $$\E[K] ≤ \E\left[∑_{w ∈ A △ B} L_w\right] = ∑_{w ∈ A △ B} \E[L_w] ≤ 2c·(2 + \lg c) = 4c + 2c\lg c.$$
 
-
+In a similar manner, we can estimate the number of communication rounds.
