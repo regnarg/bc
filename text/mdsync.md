@@ -392,10 +392,13 @@ $128(3 + 20 - 10) = 1664\,\mathrm{kB}$  transferred, that is approx. 800 bytes p
 
 Now we would like to estimate the number of communication rounds. If the algorithm
 were implemented as described in algorithm \ref{recon1}, each visited vertex would
-cost us one round. However, the algorithm can be easily modified to use a breadth-first
-traversal of the trie instead of recursive depth-first traversal. Then we can send
-digests from all active vertices on a given level in a single round. This modification
-is shown as algorithm \ref{recon1b}. It should be easy to see that this algorithm
+cost us one round. However, the algorithm can be easily modified to perform
+a breadth-first traversal of the original recursion tree. Then we can send
+digests from all active vertices on a given level in a single round and the number
+of rounds needed is exactly the depth of the recursion tree.
+
+This modification
+is shown as algorithm \ref{alg:recon1b}. It should be easy to see that this algorithm
 straightforwardly maps to the original.
 
 \begin{algorithm}
@@ -457,7 +460,7 @@ If we use the naive digest function suggested in above, computional complexity
 will be simply too horrendous to be even worth estimating, definitely at least $Ω(n)$.
 Instead, we can make the trie on each side into a Merkle tree \cite{mtree}: we define
 the digest of any nonempty set $A_s$ corresponding to vertex $v_s$ as a cryptographic
-hash of the two child sets in the trie ($\|$ is the string concatenation operator):
+hash of the digests of two child sets in the trie ($\|$ is the string concatenation operator):
 $$\textsc{Digest}(A_s) := \begin{cases}
 0\dotsm0 &\text{if }A_s = Ø\\
 \textsc{Hash}(\textsc{Digest}(A_{s\, \| \,0})\, \| \,
@@ -615,7 +618,24 @@ the length of a recursion tree branch:
 $$\E[L_w] ≤ ∑_{d=0}^\ell p^d = \lg c + 1 + 1/2 + 1/4 + \dots ≤ 2 + \lg c.$$
 The expected number total number of vertices recursed from is bounded by the sum
 of the recursion branch lengths (we count many vertices several times), which we
-can estimate using linearity of expectation):
-$$\E[K] ≤ \E\left[∑_{w ∈ A △ B} L_w\right] = ∑_{w ∈ A △ B} \E[L_w] ≤ 2c·(2 + \lg c) = 4c + 2c\lg c.$$
+can estimate using linearity of expectation:
+$$\E[K] ≤ \E\left[∑_{w ∈ A △ B} L_w\right] = ∑_{w ∈ A △ B} \E[L_w] ≤ 2c·(2 + \lg c) = 4c + 2c\lg c.$$ This corresponds to $2gc + gc\lg c$ transferred bytes for a $g-bit$ hash
+(we send two hash values per vertex, there are at most twice as many vertices visited
+as recursed from).
 
-In a similar manner, we can estimate the number of communication rounds.
+In a similar manner, we can estimate the number of communication rounds,
+again presuming this algorithm is first transformed to a breadth-first
+version in a manner similar to algorithm \ref{alg:recon1b}. The modified
+version is not shown here but can be found in attachment 1, both as
+a standalone experiment (in the file `experiments/mdsync/hybrid.py`) and as a part
+of Filoco proper (classes `TreeMDSync` in `mdsync.py` and `SyncTree` in `store.py`).
+
+For each level of the trie, we will examine the probability recursion gets to this
+level. We have at most $c$ recursion branches, each of them traversing level $d$
+with probability $p_d < c/2^d$. Using the union bound, the probability of at least
+one branch traversing this level is $q_d < c^2/2^d$. For $d < 2\lg c$, this bound
+is larger than one. For further levels, it forms a geometric sequence. Thus the expected
+depth of the recursion tree is $\E[r] = 1 + 2\lg c + 1 + 1/2 + 1/4 + \dots < 3 + 2\lg c$.
+This is the number of communication rounds required by the breadth-first variant of
+algorithm \ref{alg:recon2}.
+
