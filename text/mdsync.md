@@ -734,6 +734,10 @@ within a factor of two, both theoretically and experimentally. However, the theo
 bounds are not tight enough to distinguish between the two algorithms for these
 parameter values, thus we should give more credence to the experimental results.
 
+Please note that all the transfer and time estimates cover only the process of determining
+which objects each side is missing. After this, we must transfer the serialized objects
+themselvers; this is not included in our estimates.
+
 Both algorithms seem usable for our
 application. However, the pruning algorithm performs better, is only slightly
 more complex and offers much greater scalability because its communication complexity
@@ -824,4 +828,60 @@ This yields a simple synchronization algorithm for complete metadata synchroniza
 Thus we can perform synchronization with only one roundtrip and
 $\OO$(\#stores) bytes overhead in addition to whatever is required to transfer
 the acual objects missing on the other side.
+
+This leaves the question of why we bother with set reconciliation when a simpler
+and more efficient solution exists. There are several reasons:
+
+  * We actually discovered it much later than the general set reconciliation
+    algorithms. This seems strange because at first sight, the idea seems rather
+    trivial. But it is probably somehow evasive. Not only did we almost miss it;
+    for example the leading open source synchronization tool Syncthing also uses
+    a sequence numbering scheme but one that is slightly different and suffers
+    from the indirect synchronization problem. \cite{bep}
+
+  * Set reconciliation is an interesting problem by itself. That should be enough
+    reason for anyone. It also has numerous other applications, both within
+    file synchronization an elsewhere. For example, it has been used for delta
+    transfer of files as a replacement of the established rsync algorithm
+    \cite[sec. 4.1.2]{gentili}.
+
+  * Assigning sequential numbers has some reliability issues described bellow.
+
+Currently, both approaches are implemented in Filoco, with sequence numbering
+being the default. The main reason is surprisingly not the difference in
+reconciliation times but the need to keep the reconciliation trie on disk,
+increasing both storage overhead and slowing down database updates.
+
+### The problem with sequence numbers
+
+Any attempt to assign sequential numbers is potentially problematic. It can happen
+that Alice creates an object $o_1$, assigns it a sequence number $s$ and transfers it to Bob.
+Then Alice suffers from a power loss before $o_1$ has been flushed to disk.
+After reboot, she creates a completely unrelated object $o_2$, which nevertheless
+gets assigned the same sequence number $s$, because the information about $s$ being
+already taken has been lost. Now when Alice synchronizes with Bob, their maximum
+sequence numbers for Alice-originated objects will be the same, namely $s$. Thus they
+will mistakenly think their object sets are identical, despite Alice missing $o_1$
+and Bob missing $o_2$.
+
+Several things can be done about this. The simplest is to
+flush (`fsync`) local changes to disk before every synchronization.
+
+If we do not want to do that or do not trust the disk to reliably fullfil the
+request (which is known to happen at times), we can instead check that the
+common prefix is really the same on both sides.
+
+For example we can store for each prefix of the local object sequence a XOR
+of its object IDs. Upon synchronization, Alice and Bob exchange XORs of their
+complete sequences, $x_A$ and $x_B$, in addition to their maximum sequence numbers
+$m_A ≥ m_B$. Now Alice can compare $x_B$ to her prefix XOR of the corresponding
+prefix ending with seqence number $m_B$. If they match, Bob really has the same
+objects as are in her prefix and it is sufficient to send the remaining suffix.
+
+Otherwise a different synchronization scheme must be used. For example, we could
+perform a binary search on the sequence numbers to find the longest common prefix
+by comparing corresponding prefix XORs. Then both sides can simply exchange the
+remaining suffixes and merge them into their sequences, updating the neccesary
+prefix XORs. Presumably the error has occured recently so the suffexes than need
+to be fixed should not be long.
 
