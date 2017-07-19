@@ -278,7 +278,7 @@ Two kinds of conflicts can arise when dealing with FLVs:
     a file). This is similar to a FCV conflict but less severe because it cannot
     lead to data loss. Currently we just give precedence to the FLV with the newest
     timestamp and output a warning.
-  * A **pigeonhole conflict** happen when two head FOBs try to claim the same
+  * A **pigeonhole conflict** happens when head FLVs for different FOBs try to claim the same
     location. This is currently resolved by appending a unique suffix to each
     of the file names.
 
@@ -752,7 +752,8 @@ A similar approach has been independently discovered earlier by Minsky and Trach
 \cite{partrecon}. They use a scheme based on polynomials over finite fields for pruning
 branches where the symmetric difference is small. \cite{basic-recon} Our solution achieves
 comparable asymptotic bounds and practical results (even though perhaps with worse constant factors)
-and is much simpler both conceptually and to implement. They also describe using XOR
+and is much simpler both conceptually and to implement.
+They also discuss using XOR
 for the case of $|A △ B| = 1$. \cite[protocol 1]{basic-recon} However, they XOR the
 original bitstrings from the set instead of their hashes, which makes this technique
 unsuitable for branch pruning because all the elements under a vertex with depth $d$
@@ -1042,7 +1043,7 @@ Otherwise a different synchronization scheme must be used. For example, we could
 perform a binary search on the sequence numbers to find the longest common prefix
 by comparing corresponding prefix XORs. Then both sides can simply exchange the
 remaining suffixes and merge them into their sequences, updating the neccesary
-prefix XORs. Presumably the error has occured recently so the suffexes than need
+prefix XORs. Presumably the error has occured recently so the suffixes than need
 to be fixed should not be long.
 
 
