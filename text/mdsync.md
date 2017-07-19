@@ -246,7 +246,8 @@ does not translate to a distributed setting. For example, assume node $A$ has a 
 of new objects compared to node $C$ and keeps track of this. Now we synchonize node
 $A$ with another node $B$ and then $B$ with $C$. Now $C$ has all the extra objects from
 $A$ but $A$ is not (and cannot) be aware of that. If we synchronize $A$ with $C$ at this
-point, it will send all those objects all over again.
+point, it will send all those objects all over again. We will call this the *indirect
+synchronization problem*.
 
 Instead, we will use a stateless approach. We want a protocol that allows two nodes to
 efficiently compute the intersection $O_A ∩ O_B$ without any prior mutual information
@@ -693,15 +694,13 @@ Experimental results were produced by the
 `experiments/mdsync/prune.py` script in attachment 1.
 
 The "total roundtrip time" and "total transfer time" are synchronization time
-estimates based on roundtrip numbers and transfer total from experimental protocol
-simulations (no actual time measurements were performed). These are computed for
-a hypothetical low-quality network with $1\,$Mbps symmetric throughput and $500\,$ms RTT
-(for example a 3G connection with subpar reception). For any network with significantly
-better parameters the times will become imperceptible. Please note
-that because of interleaved communication in both directions, the actual number
-of network roundtrips needed is half the number of communication rounds (recursion
-tree depth). The total synchronization time will be probably be close to the maximum
-of the two estimates.
+estimates based on roundtrip numbers and transfer total from experimental
+protocol simulations (no actual time measurements were performed). These are
+computed for a hypothetical low-quality network with $1\,$Mbps symmetric
+throughput and $500\,$ms RTT (for example a 3G connection with subpar
+reception).  The total synchronization time will be probably be close to the
+maximum of the two estimates. For any network with significantly better
+parameters the times will become imperceptible.
 
 Metric                                              Naive D\&C              Pruning D\&C
 ---------------------------------  ---------------------------  ------------------------
@@ -759,4 +758,70 @@ both simpler and more efficient than the described reconciliation algorithms.
 
 The idea is simple: instead of considering all the object a store has as one
 big set, we will split them into several sets based on their originating
-stores
+stores and solve the reconciliation problem for each of these sets separately.
+
+Now we have a different task: several nodes have copies of a set, which
+they synchronize with each other in a disorganized peer-to-peer fashion. But only
+one node ever adds new elements to the set! All other nodes must have got their
+elements from this originating node, directly or indirectly.
+
+This is rather simple to solve: the originating node will assign created objects
+sequence numbers as they are created. All nodes will keep their sets sorted by
+these seqence numbers, essentially transforming the problem into one of sequence
+reconciliation.
+
+Whenever Alice and Bob want to reconcile their sequences, they simply compare
+their maximum sequence numbers $m_A$ and $m_B$. If $m_A > m_B$, Alice sends all
+her objects with sequence number greater than $m_B$ to Bob (who clearly does
+not have them) in increasing sequence number order (this is important). Bobs
+appends them to his sequence in the order he recieves them and sends nothing to
+Alice.  If $m_A < m_B$, the same happens in the opposite directions.
+
+We claim this is sufficient to synchronize their sets/sequences. Why? A simple
+invariant $I$ holds: the sequence of objects possesed by any node is always a
+prefix of the originating node's sequence. We can prove $I$ by induction. At
+the beginning, all sequences are empty and $I$ holds trivially. Two kinds of events
+can happen:
+
+  * The originating store adds an element at the end of the seqence. This
+    clearly preserves $I$.
+  * Two nodes $A$ and $B$ (for which $I$ holds) synchronize their sequences
+    $s_A$ and $s_B$.
+    We can assume without loss of generality that $m_A ≥ m_B$. At the beginning
+    $s_A$ and $s_B$ are prefixes of the originator's sequence $s_O$. Because
+    $s_B$ is a shorter prefix, it is also a prefix of $s_A$. After each object
+    transferred, $s_B$ becomes a longer prefix of $s_A$, and thus still a prefix
+    of $s_O$. $s_A$ is unchanged.
+    
+This yields a simple synchronization algorithm for complete metadata synchronization:
+
+\begin{algorithm}
+  \caption{Reconciliation using per-origin sequential streams
+    \label{alg:originseq}}
+  \begin{algorithmic}[1]
+    \Procedure{RecvObjects}{}
+      \While{other side has not signalled EOF}
+        \State $o \gets \textsc{RecvSerialized}()$
+        \State add $o$ to the local database (at the end of $originator(o)$'s sequence)
+      \EndWhile
+    \EndProcedure
+    \Procedure{SendObjects}{$M_A,M_B$}
+      \For{every store $s$ present in both $M_A$ and $M_B$}
+        \If{$M_A[s] > M_B[s]$}
+          \For{every object $o$ with $originator(o)=s$ and $seq(o)>M_B[s]$}
+            \State \textsc{Send}(\textsc{Serialize}(o))
+          \EndFor
+        \EndIf
+      \EndFor
+    \EndProcedure
+    \State $M_A = \{(id(s), maxseq(s)) \,|\, s\text{ store}\}$
+    \State \textsc{Send}($M_A$)
+    \State run \textsc{SendObjects}($M_A$, $M_B$) and \textsc{RecvObjects}()
+           in parallel
+  \end{algorithmic}
+\end{algorithm}
+
+Thus we can perform synchronization with only one roundtrip and
+$\OO$(\#stores) bytes overhead in addition to whatever is required to transfer
+the acual objects missing on the other side.
+
