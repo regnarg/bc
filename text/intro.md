@@ -72,8 +72,8 @@ on a desktop computer, mobile device, server, external drive or anything else wi
 a file system. We call all the stores that are synchronized among each other
 a *realm*.
 
-It follows the philosophy of *global metadata, distributed data*, pioneered
-by git-annex\cite{annex}. This means that while each store has copies of only
+It follows the philosophy of *global metadata, distributed data*. This means that
+while each store has copies of only
 some files, it has information about all the files in the realm. This
 metadata describes a single logical directory tree containing all the files
 in the realm that is consistent across all the stores.

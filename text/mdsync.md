@@ -2,30 +2,36 @@
 
 ## Metadata Model
 
-\TODO{Move this to a more general intro section?}\
-First some terminology. Filoco synchronizes data among a set of *stores*. A store
-is a directory that holds the synchronized files, along with some Filoco-specific
-metadata. The whole group of stores that are synchronized with each other is called
-a *world*.
+As stated in the introduction, in Filoco, every store keeps a complete copy
+of the metadata about all files in the realm but only stores actual data
+of a subset of the files.
 
-Filoco follows the philosphy of ``centralized metadata, decentralized data''
-espoused by git-annex:\TODO{link} each store contains metadata about every
-file in the world but only stores the content of some files. Each store can
-configure which files it wants to have copies of.
+This concept was used for example by git-annex
+\cite{annex}, where, as the name suggests, metadata is stored in a git
+repository (with actual file contents stored externally in a distributed
+fashion).
 
-Decentralization of data allows you to choose a compromise between storage
-requirements, redundancy, and availability. You can configure some small,
+The user can configure which
+files should be replicated to which stores -- either on a per-file basis
+or using filters depending on file name, path, type or size.
+This allows them to choose a compromise between storage
+requirements, redundancy, and availability. 
+
+For example you can configure some small,
 important or often-used files (emails, writings, notes, own source code) to be
-always replicated everywhere and bigger and less important files (movies you
-will probably never watch again) to have only one copy distributed among
-several slow external hard drives in your closet. And there is of course the
-middle ground of keeping some files on say 3 out of 10 available stores for
-some redundancy.
+always replicated everywhere, while bigger and less important files (movies you
+will probably never watch again) will have only one copy distributed among
+several slow external hard drives in your closet.
 
-Currently, you need to manually configure which stores store which files
-(using filters based on file path, type or size, as \TODO{described later}).
+Currently, you have to manually configure which old movies should be stored
+on which slow external drives. In the future, there should be the option of
+automatically distributing a given set of files over a given set of stores.
+So you could classify five stores as *movie disks* a thousand files as *movies*
+and Filoco would automatically spread the files across the drives.
+There could be even more advanced option, for example configure some files
+to be stored at two out of four backup drives and one out of two server stores.
 
-On the other hand, centralization of metadata allows you to always keep track
+On the other hand, global metadata allows you to always keep track
 of all your files, no matter where they are stored, even if it is an external
 hard drive in your safe deposit box. The synchronized metadata contain
 a complete directory tree (i.e. file/directory names and parent-child
@@ -33,10 +39,12 @@ relationships) of all the files in the world, which is shared among all the
 stores.
 
 This means that is is not possible to have a file stored under
-a different name in one store that in another. If a file or directory is
+a different name in one store than in another. If a file or directory is
 moved or renamed on one store, this change is replicated to all stores, even
 those not hosting the file's content. The rename can even be initiated from
-such a store. You can completely reorganize your directory hierarchy from
+such a store.
+
+You can completely reorganize your directory hierarchy from
 the comfort of your laptop, even though some of the files are physically
 located only on offline external drives. The next time you connect such drive
 and perform synchronization, these renames will be applied there.
@@ -44,28 +52,35 @@ and perform synchronization, these renames will be applied there.
 Apart from the directory tree and some basic metadata like file sizes, the
 centralized metadata contains two important pieces of information:
 
-  * Data location, that is, a list of nodes that have the file's content.
-  * Data checksum. This allows detecting media failure or tampering and
-    using another data replica if available.
+  * Data location information, that is, a list of stores that have the
+    file's content (and in what version, as described below). This allows
+    you to ask Filoco for the content of a file and if it is not locally
+    available, it will either fetch it from a reachable store that has it
+    or at least inform you on which stores host the file. You can then take
+    the right external disk out of your closet or turn on your secondary
+    laptop as neccesary.
+  * Data checksum. This allows to detect media failure or tampering and when
+    detected, use another replica if available.
 
-### Synchronized metadata
+### Detailed metadata structure
 
-Now we shall examine the metadata structure in more detail. Metadata is modelled
+Now we shall examine the structure of the globally replicated metadata in more detail.
+Metadata is modelled
 as a set of immutable *objects* of several different types (described below).
-Each object has a unique 128-bit identifier, generated etither randomly or using
-a cryptographic hash function. The result of complete synchronization between two
+Each object has a unique 128-bit identifier, generated etither pseudorandomly or using
+a cryptographic hash function from the object's content.
+The result of complete synchronization between two
 stores is always the set union of their objects, although partial synchronization
 is also possible (e.g. restricted to a directory subtree).
 
 How can we represent changing entities (e.g. files with changing content) using
-immutable objects? In exactly the same ways as git commits are organized\TODO{link?
-https://git-scm.com/book/en/v2/Git-Internals-Git-Objects}.
+immutable objects? In exactly the same ways as git commits are organized \cite{gitobj}.
 We create a new object for each version of the file, which contains references
-to the parent version(s). As in git, the version 
+to the parent version(s).
 
 As synchronization never deletes objects, we are currently forced to keep
-indefinite metadata revision history. A cleanup mechanism might be introduced
-in the future.
+indefinite metadata revision history (just as is the case for git). A cleanup
+mechanism might be introduced in the future.
 
 The following types of objects currently exist:
 
@@ -125,8 +140,11 @@ $w_B$, for the same reason.
 
 This situation is called a *(version) conflict* and is familiar to most readers
 from revision control systems like git. While in some simple scenarios, conflicts
-can be resolved automatically using techniques such as three-way merge or git's
-recursive merge, they often require user intervention.
+can be resolved automatically using techniques such as three-way merge[^3w]
+or git's recursive merge, they often require user intervention.
+
+[^3w]: This technique is now virtually ubiquitous. It originated in the GNU `diff3`
+       program developed by Randy Smith in 1988\cite{threeway}.
 
 In Filoco, we decided to leave all conflict resolution up to the user, for three reasons:
 
@@ -595,9 +613,14 @@ The second variant (with another checksum hash) is summarized as algorithm
 
 A similar approach has been independently discovered earlier by Minsky and Trachtenberg
 \cite{partrecon}. They use a scheme based on polynomials over finite fields for pruning
-branches where the symmetric difference is small. Our solution achieves comparable
-asymptotic bounds and practical results (even though perhaps with worse constant factors)
-and is much simpler both conceptually and to implement.
+branches where the symmetric difference is small. \cite{basic-recon} Our solution achieves
+comparable asymptotic bounds and practical results (even though perhaps with worse constant factors)
+and is much simpler both conceptually and to implement. They also describe using XOR
+for the case of $|A △ B| = 1$. \cite[protocol 1]{basic-recon} However, they XOR the
+original bitstrings from the set instead of their hashes, which makes this technique
+unsuitable for branch pruning because all the elements under a vertex with depth $d$
+have the first $d$ bits in common and therefore the first $d$ bits of the XOR are all
+ones or all zeroes, depending on the number of elements.
 
 #### Complexity
 
@@ -884,4 +907,5 @@ by comparing corresponding prefix XORs. Then both sides can simply exchange the
 remaining suffixes and merge them into their sequences, updating the neccesary
 prefix XORs. Presumably the error has occured recently so the suffexes than need
 to be fixed should not be long.
+
 
