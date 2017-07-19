@@ -35,7 +35,7 @@ On the other hand, global metadata allows you to always keep track
 of all your files, no matter where they are stored, even if it is an external
 hard drive in your safe deposit box. The synchronized metadata contain
 a complete directory tree (i.e. file/directory names and parent-child
-relationships) of all the files in the world, which is shared among all the
+relationships) of all the files in the realm, which is shared among all the
 stores.
 
 This means that is is not possible to have a file stored under
@@ -84,43 +84,68 @@ mechanism might be introduced in the future.
 
 The following types of objects currently exist:
 
-  * A **filesystem object (FOB)** represents one file or directory (special
-    inodes like sockets or devices are currently not supported). It serves
+  * A **filesystem object (FOB)** is the basic unit Filoco works with. It
+    represents a single file or directory (other inode types, including
+    symlinks, are currently not supported, though support should be trivial
+    to add). It serves
     primarily as an identifier for the filesystem object that is stable across
     renames. It also carries immutable metadata like inode type (file or
-    directory). Its ID is randomly generated.
+    directory).
+    
+    A filesystem object has three important conceptually mutable
+    properties: (1) content hash (files only), (2) location in the directory tree, (3)
+    storage information (a list of stores that host the file's content).
+    As suggested above, the values of these properties are not stored inside the FOB
+    object but instead as separate version objects (FCVs, FLVs and SRs) described
+    below.
 
-  * A **filesystem object version (FOV)** contains all the mutable metadata
-    about a FOB, namely:
-      - name (without path)
-      - ID of parent directory FOB
-      - timestamp (when this version was created)
-      - identifier of store where this version originated
-      - \TODO{a signature of the originating store (see the Security chapter)}
-      - for files:
-          * size
-          * content hash (except for working revisions, \TODO{see below}),
-            \TODO{What exactly? Hash of whole file? Some Merkle-tree-hash
-            of blocks?}
-      - a list of parent versions (see section on conflict resolution below)
+  * A **file content version (FCV)** contains information about one version
+    of a file's content. It stores the ID of the relevant FOB and, similartly to a
+    git commit, the content hash and a list of parent versions (FCVs) of the given file.
+    The parent list is used to establish an ordering on the versions. This is
+    necessary because the FCVs are stored in an otherwise unordered object set.
+    It also helps conflict handling. See [@sec:versioning] for a\ precise explanation
+    of parent version semantics.
 
-    The ID of a FOV is a cryptographic hash of all the above fields. Because
-    those also include parent FOV IDs (which are in turn hashes of parent FOVs),
-    the FOVs form a Merkle tree \cite{mtree}. This ensures integrity of revision
-    history and prevents a compromised node from rewriting it without notice.
+  * A **FOB location version (FLV)** describes the location of a filesystem object as
+    a versioned property. Location is represented by the tuple (*parent*, *name*),
+    where *parent* is the ID of the parent FOB. This format was chosen for three
+    reasons: (1) It allows us to efficiently rename or move directories that contain
+    a large number of files and subdirectories (which would be impossible if we stored
+    full path for each file). Each such move costs only one new FLV for the directory
+    being moved. (2) While maintaining a list of child FOBs for each directory would also
+    allow for efficient renames and would be closer to Unix tradition, a parent
+    pointer is a scalar value whose versioning is conceptually much easier than trying
+    to define semantics for versioning child lists. (3) It corresponds to my personal
+    intuition that name and parent directory are logically properties of the file (for
+    name it should be quite clear, directory could be considered a kind of category
+    tag attached to a file). Similarly to FCVs, a FLV carries a list of parent FLVs.
 
-  * \TODO{A **storage record (SR)**.}
+  * **Storage records (SR)** describe storage events. A storage event consists of
+    a store beginning or ceasing to host a given FCV. The fields of a SR
+    are (1) store identifier, (2) FCV ID, (3) event type (start or end of object hosting) and (4)
+    a list of parent SRs, just as with other versioned objects. To determine whether
+    a store has the contents of a FCV available, one has to look at the event type
+    of the last (by parent-child ordering) SR for the given FCV and store ID (while
+    remembering that this information is not necessarily up to date, so we have to
+    be wary about deleting a file independently on two stores because each of them
+    thinks the other has a copy).
 
-Please note that the versioning of FOBs is there only to facilitate synchronization,
+There are also a few attributes common to all the object types:
+
+  * An identifier of the store which created the object.
+  * A creation timestamp.
+
+Please note that the versioning of FOB properties is there only to facilitate synchronization,
 conflict resolution (see below), and auditing. We do not try to systematically
 keep the content of old file versions. Except for when conflicts occur, each store
-only keeps the newest version of any file known to it. Because of synchronization
-delays, old versions can be present in the world for quite some time but this is
+only keeps the content of the newest version of any file. Because of synchronization
+delays, old versions can be present in the realm for quite some time but this is
 a byproduct and users should definitely not rely on that. However, the architecture
 is intentionally designed such that (optional) versioning can be implemented in the
 future.
 
-### Versioning and conflict resolution
+### Versioning and conflict resolution                          {#sec:versioning}
 
 Wherever there is bidirectional synchronization, there looms the threat
 of conflicts. Imagine that two stores $A$ and $B$ have the same version $v$ of
@@ -132,8 +157,8 @@ creating a new version $w_B$.
 
 When they synchronize $A$ with $B$ later, both stores will have both versions
 $w_A$ and $w_B$ in their metadata database. But which of these versions should
-be considered ``current'', which version of the file should be written to the
-file system? Clearly, it is incorrect to replace $w_A$ with $w_B$ on $A$
+be considered ``current'', which version of the file should be *checked out*
+(i.e., written to the file system)? Clearly, it is incorrect to replace $w_A$ with $w_B$ on $A$
 (even though $w_B$ has a newer timestamp), because the changes made from $v$
 to $w_A$ would be lost. It is also incorrect to just keep $w_A$ and ignore
 $w_B$, for the same reason.
@@ -151,13 +176,13 @@ In Filoco, we decided to leave all conflict resolution up to the user, for three
   * Conflicts should be much less common than in revision control systems. Most
     RCS conflicts are caused by multiple people working on one project simultaneously.
     Because our primary focus is managing personal data, we usually expect only one
-    person making changes to files in a Filoco world. But conflicts certainly can
+    person making changes to files in a Filoco realm. But conflicts certainly can
     happen, e.g. because of delayed synchronization and offline stores, as suggested
     by the scenario above.
 
   * We are not limited to source code or plain text and have to handle all kinds of
     files including binary (LibreOffice documents, images, archives, databases\dots).
-    There is no universal conflict resolution strategy for such a wide variantion of
+    There is no universal conflict resolution strategy for such a wide variety of
     file types.
 
   * As we do not systematically keep the content of old file versions, the common
@@ -186,7 +211,7 @@ The following additional requirements have been set for conflict handling in Fil
     with a store $C$ that has neither, it should transfer both versions there.
     The user can then resolve the conflict in any of the stores.
 
-4.  Once a conflict is resolved in one store, the resolution should spread to all
+4.  Once a conflict has been resolved in one store, the resolution should spread to all
     other stores. This makes the previous requirement much more useful. Of course,
     if there were independent changes that were not part of the resolution, this
     can create more conflicts.
@@ -196,15 +221,18 @@ The following additional requirements have been set for conflict handling in Fil
 
 
 We shall present a simple solution that fulfills ale these requirements. It is in
-large part based on how branching and merging works in git.
+large part based on how branching and merging works in git. First, we shall look
+into content versioning and then briefly mention location versioning and storage
+record relationships.
 
-Each FOV has a list of parent FOVs. Usually (except for when resolving conflicts),
+Each FCV has a list of parent FCVs. Usually (except for when resolving conflicts),
 this list contains just a single item: the logically preceding version. When you
 have a version $v$ of a file on your file system and modify it, a new version $w$
 is created with a single parent $v$. The parent-child relationship signifies that
 $w$ is based on $v$, that it incorporates all the content from $v$ that the user
 did not purposefully remove, that it supersedes $v$. Whenever a store has version
-$v$ checked out\TODO{define checkout earlier} (and not locally modified) and
+$v$ checked out (meaning that the contents of the corresponding file in the
+user's local file system corresponds to version $v$) and
 acquires version $w$ through synchronization, Filoco automatically replaces
 the checked out version with $w$.
 
@@ -213,7 +241,6 @@ a partial ordering on the versions. As long as you keep your replicas up to date
 and always edit only the chronologically newest version of the file, the ordering
 is linear (the version graph is a path) and there is a unique maximum ("newest
 verson").
-
 
 However, when you make changes to an older version of the file (in a store that
 is not up to date) and later synchronize them, the history branches, as shown
@@ -234,15 +261,125 @@ differences:
     resolving conflicts individually and leaving some unresolved for a later
     time.
   * Branching is implicit. It works as if whenever you were trying to do
-    a non-fast-forward push in git, instead of rejecting it, a new unnamed
+    a non-fast-forward push in git, instead of the remote rejecting it, a new unnamed
     branch would be automatically created. This allows synchronization in
     the presence of conflicts and delayed conflict resolution.
 
 ![History branching during a conflict\label{branch}](img/branch.pdf){#fig:branch}
 
-### Working revisions
+File locations are versioned independently from content, so that one can edit the
+file in one store and rename it in other without this constituting a conflict
+(this fullfills requirement \#5).
 
-### Placeholders
+Two kinds of conflicts can arise when dealing with FLVs:
+
+  * An **identity crisis** conflict happens when the FLV graph for a given FOB
+    has multiple heads (i.e., we try to assign multiple different locations to
+    a file). This is similar to a FCV conflict but less severe because it cannot
+    lead to data loss. Currently we just give precedence to the FLV with the newest
+    timestamp and output a warning.
+  * A **pigeonhole conflict** happen when two head FOBs try to claim the same
+    location. This is currently resolved by appending a unique suffix to each
+    of the file names.
+
+Storage records use the same parent-version mechanism but with differrent semantics.
+Whenever a new SR is created, its parents are all the current SR heads of a given
+FOB (regardless of from which store they are). This gives a partial ordering on
+the SRs. This is purely for informative purposes. SR heads have no special meaning,
+multiple SR heads are not considered a conflict or in any way an unusual state.
+
+### Alternative versioning: vector clocks
+
+As an alternative to explicit git-like parent version pointers, we could use
+*vector clocks* for partially ordering versions.
+This is a now almost universally known mechanism for versioning in distributed
+systems, discovered independently by two teams in 1988 \cite{vclock1}\cite{vclock2}.
+
+Their main
+advantage is that we do not need to maintain information about previous versions.
+Instead, it suffices to remember a vector of $s$ integers (where $s$ is the number
+of stores in the realm) for each head version. The partial ordering between any
+two versions can be determined by just looking at their vectors, without any additional
+information. As we expect $s$ to be small and infrequently changing, this seems
+to be fairly efficient.
+
+The main reason to use for an explicit version graph is to keep a permanent record
+of changes made to a file for auditing purposes.
+This is useful when dealing with potentially compromised stores. When a file
+contains unexpected data, you can look up which stores modified
+it and when. The version graph can be made into a Merkle DAG (which works exactly
+the same as a Merkle tree \cite{mtree}, only it is a generic DAG instead of a tree)
+to prevent anyone from rewriting history. This is exactly the same thing that git does
+with commits. \cite{gitobj}
+
+### Working versions
+
+Creating new FCVs is expensive. Not only additional versions increase metadata storage
+requirements but we also have to compute a hash of the file's content, which is slow
+and creates unnecessary I/O and CPU load on the system. If some process writes a few kB
+into a $4\,$GB file every second (think disk images and large databases), we definitely
+do not want to read the whole file and compute a hash every time. Not to mention that
+computing a hash of a file that can change at any moment is riddled with race conditions,
+which have to be handled, increasing the price even more.
+
+To overcome this, whenever a local change to a file is detected, a so-called *working FCVs*
+is created. This is a special FCV with the content hash field left empty. This version
+normally participates in metadata synchronization, to let the other stores know you have
+a new version of the file.
+
+Whenever you want to synchronize the contents of the file with another store
+(see chapter \ref{chap:datasync} for details on that),
+a full FCV is created with the working FCV as a parent. This is rather cheap because
+during data synchronization, we have to read the whole file and deal with race conditions
+anyway.
+
+Storage records are never created for working FCVs. The only store that can ever have
+the data for a working FCV is the one that created it. Whenever the data is transferred
+to another store, a full FCV is created to represent the transferred version of the file.
+
+A working FCV never has another working FCV as a parent. When the local head already is
+a working FCV and the file is further modified, no new FCVs are created, the current working
+FCV is simply re-used to represent the newer modified version. A consequence of this is
+that one cannot reliably determine the file's last modification time from a working FCV
+timestamp because the FCV is created upon the first of a series of local modification.
+While a last modified timestamp would be a nice information to have in the metadata, we
+consider this a small price to pay for less version bloat.
+
+### Placeholder inodes
+
+One of the major goals of Filoco is to present the user with an unified view of their
+data, no matter where they are physically stored. This means first and foremost
+a\ unified directory tree. This begs the question of how to represent files for which
+we have no data in the local file system.
+
+We could omit them completely and offer some specialized tools (called perhaps `filoco-ls`,
+`filoco-tree`, etc.) to list the locally missing files. However, this seems rather inconvenient.
+We opted for a different method, and that is to represent them with a special kind of
+inode. The best choice seems to be a broken symlink, i.e., one with a nonexistent target
+(`/!/filoco-missing`) in our case.
+
+This has several advantages:
+
+  * The user can see the missing files with all the filesystem access tools they are
+    used to, from CLI tools to graphical file managers, search tools, shell scripts, etc.
+    All of them will give the same consistent view of the global directory tree.
+  * The user can manupulate (especially move, rename and delete) locally missing files
+    using any tools of their chosing: command-line `mv`, file managers, mass rename
+    tools, shell scripts or custom programs in any language.
+  * Many programs visualize broken symlinks in a way that symbolizes the concept of
+    "missing". `ls` shows it in red, some GUI programs will show a cross mark or warning
+    icon, etc.
+  * When a program shows symlink targets (as `ls -l` does, or some file managers in the
+    status bar), the user sees the informative string "filoco-missing".
+  * When trying to access the file programmatically, one gets the correct error code,
+    namely `ENOENT` ("No such file or directory"), the same error as returned for nonexistent
+    file names.
+  * The chosen target `/!/filoco-missing` offers one more advantage: the `/!`\ directory
+    is unlikely to exist on anyone's file system. Thus when one tries to open the symlink
+    for writing (e.g. using `echo x >some-missing-file`), they also get an error because
+    the target cannot be created. If we used a relative target such as
+    `filoco-missing`, a file named `filoco-missing` would be silently created upon the
+    write attempt, turning the symlink into a non-broken one.
 
 ## The Set Reconciliation Problem
 
