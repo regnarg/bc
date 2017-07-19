@@ -1,5 +1,0 @@
-## 10^5 objects, 500+500 changes, arity=16
-
-Roundtrips: 6
-Total xfer: 362.6 kB
-Per change: 371 B

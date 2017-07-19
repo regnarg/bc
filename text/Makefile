@@ -11,10 +11,12 @@ img/%.pdf: img/%.asy
 thesis.pdf: thesis.tex $(wildcard *.tex) $(subst .md,.tex,$(wildcard *.md)) \
 			bibliography.bib $(subst .asy,.pdf,$(wildcard img/*.asy)) \
 			thesis.xmpdata
+	biber thesis
 	pdflatex --interaction=nonstopmode $<
 	#bibtex thesis
 	biber thesis
 	pdflatex --interaction=nonstopmode $<
+	biber thesis
 	pdflatex --interaction=nonstopmode $<
 
 clean:

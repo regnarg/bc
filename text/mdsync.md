@@ -91,7 +91,7 @@ The following types of objects currently exist:
 
     The ID of a FOV is a cryptographic hash of all the above fields. Because
     those also include parent FOV IDs (which are in turn hashes of parent FOVs),
-    the FOVs form a Merkle tree \cite{merkle}. This ensures integrity of revision
+    the FOVs form a Merkle tree \cite{mtree}. This ensures integrity of revision
     history and prevents a compromised node from rewriting it without notice.
 
   * \TODO{A **storage record (SR)**.}
@@ -393,10 +393,6 @@ number, i.e., $12c + 4c(\lg n - \lg c)$ and the total number of bytes transmitte
 is $cg(3 + \lg n - \lg c)$, where $g$ is the digest size (we send two $g/8$-byte
 digests per visited vertex).
 
-For a realistic example with $n=2^{20}$, $c=1024$, and $g = 128$, we would get
-$128(3 + 20 - 10) = 1664\,\mathrm{kB}$  transferred, that is approx. 800 bytes per change
-(remember there are really $2c$ total changes).
-
 ##### Communication rounds
 
 Now we would like to estimate the number of communication rounds. If the algorithm
@@ -415,13 +411,13 @@ straightforwardly maps to the original.
     \label{alg:recon1b}}
   \begin{algorithmic}[1]
     \Procedure{Recon1-BFS}{$A$}
-      \State $active \gets [ε]$\Comment{ordered list of active vertices on cur. level}
+      \State $active \gets [\,ε\,]$\Comment{ordered list of active vertices on cur. level}
       \State $C \gets ∅$\Comment{the local changes ($A \setminus B$)}
-      \While{$active ≠ []$}
+      \While{$active ≠ [\,]$}
         \State $d_A \gets \left[\, \textsc{Digest}(A_s) \,|\, s ∈ active \,\right]$
         \State \textsc{Send}($\|\,d_A $)\Comment{concatenation of all active vertices' digests}
         \State $d_B \gets \textsc{Recv}()$ split into digest-sized chunks
-        \State $next \gets []$
+        \State $next \gets [\,]$
         \For{$0 ≤ i < |active|$}
           \If{$d_A[i]=d_B[i]$}
             \State do nothing
@@ -460,10 +456,21 @@ the expected number of levels visited $\E[r_\mathrm{III}] ≤ 3+\lg c$.
 
 When we put this together, we can bound the expected number of communication
 rounds by $\E[r] = \E[r_\mathrm{I}] + \E[r_\mathrm{II}] + \E[r_\mathrm{III}] ≤
-3 + \lg n + \lg c$. With the example parameters above, this would be 33 roundtrips.
-On a higher-latency network with RTT $250\,$ms, this would make the synchronization
-time at least 8 seconds. Aven for a silngle change, this will still be 23 roundtrips
-or almost 6 seconds (though this is only an upper bound).
+3 + \lg n + \lg c$.
+
+Note that our protocol is not a request-response protocol. Instead, communication
+in both directions happens at the same time. The message we recieve in round $i$
+is not a reply to the message we sent in round $i$ but the one we sent in round
+$i-1$. This means that the number of network round trips required is half the number
+of cummunication rounds, as shown in [@fig:rounds].
+
+![Communication rounds vs network roundtrips](img/rounds.pdf){#fig:rounds}
+
+We should also realize the importance of the breadth-first optimization here.
+The naive recursive implementation would require as many rounds as vertices visited, 
+$12c + 4c(\lg n - \lg c)$. This would require hundreds to thousands of roundtrips
+for moderate values of $c$, which would result in a total time of several seconds
+to several minutes(!) depending on network quality.
 
 ##### Computational time
 
@@ -683,22 +690,14 @@ For clarity, we summarize the efficiency of both algorithms in [@tbl:setrec-comp
 (for 128-bit digests).
 
 Experimental results were produced by the
-`experiments/mdsync/hybrid.py` script in attachment 1. This script simply generates
-a set of $2^{20}$ random 128-bit numbers, copies it and then makes `CHANGES` changes
-in each copy and simulates the reconciliation protocol. It can be configured
-by editing the variables
-`SIZE`, `CHANGES` and `ONEDIFF_OPT`. `ONEDIFF_OPT` decides whether the pruning
-optimization is used. We use the XOR-based digest even for the non-pruning
-version but we do not count the additional checksum part as transferred bytes
-and otherwise the algorithms should have very similar properties. Beware that
-this is an inefficient Python script that stores everything memory. At least
-$16\,$GB RAM is recommended for running it and it may take a few minutes.
+`experiments/mdsync/prune.py` script in attachment 1.
 
 The "total roundtrip time" and "total transfer time" are synchronization time
 estimates based on roundtrip numbers and transfer total from experimental protocol
 simulations (no actual time measurements were performed). These are computed for
 a hypothetical low-quality network with $1\,$Mbps symmetric throughput and $500\,$ms RTT
-(for example a 3G connection with subpar reception). Please note
+(for example a 3G connection with subpar reception). For any network with significantly
+better parameters the times will become imperceptible. Please note
 that because of interleaved communication in both directions, the actual number
 of network roundtrips needed is half the number of communication rounds (recursion
 tree depth). The total synchronization time will be probably be close to the maximum
@@ -708,10 +707,10 @@ Metric                                              Naive D\&C              Prun
 ---------------------------------  ---------------------------  ------------------------
 total bytes transferred            $128c(3 + \lg n - \lg c)$    $128c(2 + \lg c)$
 $\quad$ for $n=2^{20}$             $128c(23 - \lg c)$           $128c(2 + \lg c)$
-$\qquad$ for $c=16$ (theor.)       $38\,$kB ($1.2\,$kB p.ch.)   $12\,$kB ($354\,$B p.ch.)
-$\qquad$ for $c=16$ (exper.)       $51\,$kB ($1.6\,$kB p.ch.)   $11.1\,$kB ($354\,$B p.ch.)
+$\qquad$ for $c=16$ (theor.)       $38\,$kB ($1.2\,$kB p.ch.)   $12\,$kB ($0.3\,$kB p.ch.)
+$\qquad$ for $c=16$ (exper.)       $51\,$kB ($1.6\,$kB p.ch.)   $11.1\,$kB ($0.3\,$kB p.ch.)
 $\qquad$ for $c=1024$ (theor.)     $1.6\,$MB ($0.8\,$kB p.ch.)  $1.5\,$MB ($1.5\,$kB p.ch.)
-$\qquad$ for $c=1024$ (exper.)     $1.6\,$MB ($0.8\,$kB p.ch.)  $651.1\,$kB ($325\,$B p.ch.)
+$\qquad$ for $c=1024$ (exper.)     $1.6\,$MB ($0.8\,$kB p.ch.)  $650\,$kB ($0.3\,$kB p.ch.)
 communication rounds               $3 + \lg n + \lg c$          $3 + 2\lg c$                       
 $\quad$ for $n=2^{20}$             $23 + \lg c$                 $3 + 2\lg c$                       
 $\qquad$ for $c=16$ (theor.)       27                           11
@@ -731,8 +730,33 @@ $\qquad$ for $c=1024$              $12.8\,$s                    $5.2\,$s
 
 : Comparison of described set reconciliation algorithms {#tbl:setrec-comp}
 
-In the model situation of $n=2^20$ and $c=16..1024$, both algorithms seems comparable
-within a factor of two, both theoretically and experimentally. Both seem usable for our
+In the model situation of $n=2^{20}$ and $c=16..1024$, both algorithms seems comparable
+within a factor of two, both theoretically and experimentally. However, the theoretical
+bounds are not tight enough to distinguish between the two algorithms for these
+parameter values, thus we should give more credence to the experimental results.
+
+Both algorithms seem usable for our
 application. However, the pruning algorithm performs better, is only slightly
-more complex and offers much greater scalability because its parameters do not depend
-on $n$.
+more complex and offers much greater scalability because its communication complexity
+and number of rounds do not depend on $n$.
+
+## Per-Origin Sequential Streams
+
+Upon further reflection, we actually do not need to solve the fully general set
+reconciliation problem. Our instance is rather special in one key factor: each
+object is only ever created once, in one store. Therefore, the assumption of set
+reconciliation that there is no prior communication between the parties is not
+true. If two stores share an object, there must have been prior communication
+between each of them and the object's originating store, albeit possibly indirect.
+
+There are two more important special properties: (1) we always perform full
+synchronization (unless the synchronization process is interrupted), partial
+synchronization is not supported; (2) the number of stores in a realm is expected
+to be small (in the order of tens at most).
+
+If we put all these facts together, we can devise a synchronization scheme
+both simpler and more efficient than the described reconciliation algorithms.
+
+The idea is simple: instead of considering all the object a store has as one
+big set, we will split them into several sets based on their originating
+stores

@@ -503,7 +503,7 @@ of a depth-first traversal that visits children in the order returned by
 `getdents`, *inode* is ascending inode number order and *random* is a completely
 random shuffle of all the inodes) and different access methods (by path or
 by handle). The measurement was performed on a real-world filesystem with
-approximately 2 million inodes, $10\,%$ of which were directories.
+approximately 2 million inodes, $10\,\%$ of which were directories.
 
 We experimented with several other techniques, for example massively
 parallelizing the scan in the hope that the kernel and/or hard disk controller
