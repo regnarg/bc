@@ -102,10 +102,18 @@ class SqliteWrapper(object):
         return self._iter(cur, assoc=assoc)
 
     def query_first(self, query, *args, **kw):
+        assoc = kw.pop('_assoc', True)
+        cur = self.connection.cursor()
+        cur.execute(query, kw or args)
         try:
-            return next(self.query(query, *args, **kw))
+            row = next(cur)
         except StopIteration:
             return None
+        if assoc:
+            col_names = [ desc[0] for desc in cur.getdescription() ]
+            row = AttrDict(zip(col_names, row))
+        cur.close()
+        return row
 
     def execute(self, query, *args, **kw):
         if D_DBW and not query.lower().startswith('select '):
@@ -154,11 +162,16 @@ class SqliteWrapper(object):
         return self.connection.changes()
 
     def __enter__(self):
+        if self.connection.getautocommit():
+            # Starting new transaction, initialize transaction-local variables
+            self.trans_local = AttrDict()
         self.connection.__enter__()
         return self
 
     def __exit__(self, tp, val, tb):
-        return self.connection.__exit__(tp, val, tb)
+        self.connection.__exit__(tp, val, tb)
+        if self.connection.getautocommit():
+            self.trans_local = None
 
     def ensure_transaction(self):
         """Wrap in a transaction if one is not already active but do not create a nested transaction"""
@@ -178,7 +191,9 @@ class SqliteWrapper(object):
         # A dummy SQL update that does nothing
         if not self._dummy_created:
             self.execute("create table if not exists lock_dummy (dummy)")
-        self.execute("update lock_dummy set dummy=1 where 0=0")
+        if not self.trans_local.get('locked'):
+            self.execute("update lock_dummy set dummy=1 where 0=0")
+            self.trans_local.locked = True
 
 def fdscandir(fd):
     """Read the contents of a directory identified by file descriptor `fd`."""

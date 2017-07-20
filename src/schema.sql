@@ -69,11 +69,11 @@ create table syncables (
 create unique index syncables_origin_serial on syncables (
     origin_idx, serial
 );
-create view syncables_local as select * from syncables where origin_idx=0;
-create trigger syncables_local_insert instead of insert on syncables_local begin
-    insert into syncables (origin_idx, serial, id, kind, created)
-        values (0, coalesce(new.serial, (select max(serial) from syncables_local)+1, 1), new.id, new.kind, new.created);
-end;
+-- create view syncables_local as select * from syncables where origin_idx=0;
+-- create trigger syncables_local_insert instead of insert on syncables_local begin
+--     insert into syncables (origin_idx, serial, id, kind, created)
+--         values (0, coalesce(new.serial, (select max(serial) from syncables_local)+1, 1), new.id, new.kind, new.created);
+-- end;
 #endif
 
 #if sync_mode == 'synctree'

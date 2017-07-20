@@ -367,25 +367,32 @@ class Store:
         return hashlib.sha256(json.dumps(data, sort_keys=True).encode('utf-8')).hexdigest()[:32]
 
     def add_syncable(self, id, kind, origin=None, serial=None, created=None, **data):
-        if id is None:
-            #if kind == 'fob': id = gen_uuid()
-            #else: id = self.compute_object_id(kind, origin, **data)
-            id = gen_uuid()
-        if origin is None: origin_idx = 0
-        else: origin_idx = self.get_store_idx(origin)
-        if created is None: created = time.time()
+        with self.db.ensure_transaction():
+            if id is None:
+                #if kind == 'fob': id = gen_uuid()
+                #else: id = self.compute_object_id(kind, origin, **data)
+                id = gen_uuid()
+            if origin is None: origin_idx = 0
+            else: origin_idx = self.get_store_idx(origin)
+            if created is None: created = time.time()
 
-        if self.sync_mode == 'synctree':
-            self.synctree.add(id, kind, origin_idx=origin_idx, created=created)
-        else:
-            if serial is None:
-                assert origin is None
-                self.db.execute('insert into syncables_local (id, kind, created) values (?, ?, ?)', id, kind, created)
+            if self.sync_mode == 'synctree':
+                self.synctree.add(id, kind, origin_idx=origin_idx, created=created)
             else:
-                self.db.execute('insert into syncables (id, kind, origin_idx, serial, created) values (?, ?, ?, ?, ?)',
-                                    id, kind, origin_idx, serial, created)
-        self.db.insert(self.TYPE2TABLE[kind], id=id, **data)
-        return id
+                if serial is None:
+                    assert origin is None
+                    self.db.lock_now()
+                    if 'last_local_seq' not in self.db.trans_local:
+                        last_seq = self.db.query_first('select coalesce(max(serial), 0) from syncables where origin_idx=0', _assoc=False)[0]
+                        self.db.trans_local.last_local_seq = last_seq
+                    self.db.trans_local.last_local_seq += 1
+                    self.db.execute('insert into syncables (id, kind, created, origin_idx, serial) values (?, ?, ?, 0, ?)',
+                            id, kind, created, self.db.trans_local.last_local_seq)
+                else:
+                    self.db.execute('insert into syncables (id, kind, origin_idx, serial, created) values (?, ?, ?, ?, ?)',
+                                        id, kind, origin_idx, serial, created)
+            self.db.insert(self.TYPE2TABLE[kind], id=id, **data)
+            return id
 
     def open_db(self):
         self.db = SqliteWrapper('/proc/self/fd/%d/meta.sqlite' % self.meta_fd, wal=True)
