@@ -27,9 +27,20 @@ def init_debug(cats):
         glob['D_' + cat.upper()] = cat in enabled_cats
 init_debug(['dbw', 'fd', 'pdb'])
 
+ID_BITS = 128
+ID_BYTES = ID_BITS//8
+
 def gen_uuid():
     """Generate a random 128-bit ID and return it as a hexadecimal string."""
-    return str(uuid.uuid4()).replace('-','')
+    return binascii.unhexlify(str(uuid.uuid4()).replace('-',''))
+
+def split_idlist(s):
+    r = []
+    for i in count(0, ID_BYTES):
+        id = s[i:i+ID_BYTES]
+        if not id: break
+        r.append(id)
+    return r
 
 class AttrDict(dict):
     """A dictionary that allows access to items using the attribute syntax."""

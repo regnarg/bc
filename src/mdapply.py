@@ -110,7 +110,7 @@ class MDApply:
         ret = []
 
         def add_fob(fob, needed_for=None, needed_role=None, ignore_cycle=False):
-            if isinstance(fob, str):
+            if isinstance(fob, bytes):
                 fob_id = fob
                 if fob_id in by_fob: return by_fob[fob_id]
                 fob = self.db.query_first('select rowid,* from fobs where id=?', fob_id)
@@ -157,7 +157,7 @@ class MDApply:
             try:
                 add_fob(fob)
             except TooMessy as exc:
-                log.error("Cannot update FOB %s because of filesystem/metadata mess: %s", fob.id, str(exc))
+                log.error("Cannot update FOB %s because of filesystem/metadata mess: %s", binhex(fob.id), str(exc))
 
         return ret
 
@@ -174,7 +174,7 @@ class MDApply:
             flv = task.flv
             inode, info = self.get_fob_single_inode(fob.id)
             if info is None:
-                tmp_name = 'filoco-mdapply-placeholder-%s' % (fob.id)
+                tmp_name = 'filoco-mdapply-placeholder-%s' % (binhex(fob.id))
                 tmp_path = str(self.placeholder_dir / tmp_name)
 
                 try:
@@ -201,7 +201,7 @@ class MDApply:
 
     def rename_to_longname(self, src_dfd, src_name, dst_dfd, dst_name, fob):
         for idx in range(1, 1000):
-            target_name = "%s.FL-%s-%s" % (dst_name, fob, idx)
+            target_name = "%s.FL-%s-%s" % (dst_name, binhex(fob), idx)
             try: renameat2(+src_dfd, src_name, +dst_dfd, target_name, RENAME_NOREPLACE)
             except FileExistsError: continue
             else: return target_name
@@ -213,7 +213,7 @@ class MDApply:
             target_inode, target_info = task.get_parent_inode()
             logical_name = task.flv.name
             if target_info is None:
-                log.warning("Target inode not found for FOB %s. Skipping.", fob.id)
+                log.warning("Target inode not found for FOB %s. Skipping.", binhex(fob.id))
                 continue
             new_links = []
             if task.src_name:
@@ -242,7 +242,7 @@ class MDApply:
                             continue
                         good_links.append((parent_inode, parent_info, link.name, inode, info, link.rowid))
                 if not good_links:
-                    log.warning("No good links found for FOB %s, not renaming. Please rescan and run mdapply again.", fob.id)
+                    log.warning("No good links found for FOB %s, not renaming. Please rescan and run mdapply again.", binhex(fob.id))
                     continue
                 for parent_inode, parent_info, name, inode, info, link_rowid in good_links:
                     target_name = self.rename_to_longname(parent_info.fd, name, target_info.fd, logical_name, fob=fob.id)
@@ -278,7 +278,7 @@ class MDApply:
             try:
                 renameat2(+parent_info.fd, name, +parent_info.fd, name.split(Store.LONGNAME_SEPARATOR)[0], RENAME_NOREPLACE)
             except FileExistsError:
-                log.warning("Cannot rename %s/%s to shortname, something is in the way.", task.flv.parent_fob, name)
+                log.warning("Cannot rename %s/%s to shortname, something is in the way.", binhex(task.flv.parent_fob), name)
                 continue
 
     def mark_as_updated(self, batch):

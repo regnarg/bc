@@ -58,7 +58,7 @@ class MDSync(Protocol):
                 kw.update({'_is_head': 1})
                 self.db.update('fobs', 'id=?', kw['fob'], **{'_new_%ss'%kind: time.time()})
                 if kw['parent_vers']:
-                    for parent_ver in kw['parent_vers'].split(','):
+                    for parent_ver in split_idlist(kw['parent_vers']):
                         self.db.update(Store.TYPE2TABLE[kind], 'id=?', parent_ver, _is_head=0)
             self.store.add_syncable(obj['id'], obj['kind'], origin=obj['origin'], **kw)
 

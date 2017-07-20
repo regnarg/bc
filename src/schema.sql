@@ -4,15 +4,15 @@ create table inodes (
     ino integer primary key on conflict replace,
     handle_type integer,
     handle blob,
-    iid text unique,
+    iid blob unique,
     type text, -- 'r', 'd', 'l', etc.
     scan_state integer default 0,
     size integer,
     mtime integer,
     btime integer, -- creation time (if available), otherwise discover time
-    fob text references fobs(id),
-    flv text references flvs(id),
-    fcv text references fcvs(id)
+    fob blob references fobs(id),
+    flv blob references flvs(id),
+    fcv blob references fcvs(id)
 );
 
 -- including 'ino' in the index helps sorting
@@ -60,7 +60,7 @@ create table syncables (
 #if sync_mode == 'synctree':
     tree_key integer not null,
 #endif
-    id text unique not null,
+    id blob unique not null,
     kind text not null,
     created integer not null
 );
@@ -90,7 +90,7 @@ create table synctree (
 # endif
 
 create table fobs (
-    id text unique not null references syncables(id),
+    id blob unique not null references syncables(id),
     type text,
     _new_flvs integer not null default 0,
     _new_fcvs integer not null default 0,
@@ -101,28 +101,28 @@ create index fobs_new_flvs on fobs (_new_flvs);
 create index fobs_new_fcvs on fobs (_new_fcvs);
 
 create table flvs (
-    id text unique not null references syncables(id),
-    fob text not null references fobs(id),
-    parent_fob text references fobs(id),
+    id blob unique not null references syncables(id),
+    fob blob not null references fobs(id),
+    parent_fob blob references fobs(id),
     name text,
-    parent_vers text,
+    parent_vers blob,
     _is_head integer default 1
 );
 create index flvs_fob on flvs (fob, _is_head);
 create index flvs_loc on flvs (parent_fob, name);
 
 create table fcvs (
-    id text unique not null references syncables(id),
-    fob text not null references fobs(id),
-    content_hash text,
-    parent_vers text,
+    id blob unique not null references syncables(id),
+    fob blob not null references fobs(id),
+    content_hash blob,
+    parent_vers blob,
     _is_head integer default 1
 );
 create index fcvs_fob on flvs (fob, _is_head);
 
 create table srs (
-    id text unique references syncables(id),
-    fcv text,
+    id blob unique references syncables(id),
+    fcv blob,
     state integer
 );
 

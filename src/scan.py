@@ -250,7 +250,7 @@ class Scanner:
         # on_link_to_fob will be called later when we assign FOB to parent.
         if info.type == 'r' and old_obj and old_obj.type == 'r' and old_obj.fob and not obj.fob:
             if D_MDUPDATE: log.debug("Detected replacement: fob (%s, %s, %s), inode %d(%s) -> %d(%s)",
-                                    old_obj.fob, old_obj.flv, old_obj.fcv, old_obj.ino, old_obj.iid, obj.ino, obj.iid)
+                                    binhex(old_obj.fob), binhex(old_obj.flv), binhex(old_obj.fcv), old_obj.ino, binhex(old_obj.iid), obj.ino, binhex(obj.iid))
             self.assign_fob(info, obj, fob_id=old_obj.fob, flv_id=old_obj.flv,
                             fcv_id=self.store.create_working_version(old_obj.fob, old_obj.fcv))
         if parent_obj.fob or parent_obj.iid == 'ROOT':
@@ -262,7 +262,7 @@ class Scanner:
         with self.db.ensure_transaction():
             if not replace and self.db.query_first('select 1 from inodes where iid=? and fob is not null', obj.iid):
                 return
-            if D_MDUPDATE: log.debug("Assigning inode %s to FOB (%s, %s, %s)", obj.iid, fob_id, flv_id, fcv_id)
+            if D_MDUPDATE: log.debug("Assigning inode %s to FOB (%s, %s, %s)", binhex(obj.iid), binhex(fob_id), binhex(flv_id), binhex(fcv_id))
             self.db.update('inodes', 'iid=?', obj.iid, fob=fob_id, fcv=fcv_id, flv=flv_id)
             obj.fob = fob_id
             obj.flv = flv_id
@@ -292,7 +292,7 @@ class Scanner:
                 # They should come with pre-created inode record in DB associated to a FOB.
                 # If there is a longname without iid/FOB, it's a bug.
                 if Store.LONGNAME_SEPARATOR in name:
-                    log.warning("Longname without FOB: %s/%s (iid %s)", parent_obj.fob, name, obj.iid)
+                    log.warning("Longname without FOB: %s/%s (iid %s)", binhex(parent_obj.fob), name, binhex(obj.iid))
                     return
                 self.create_fob(parent_obj.fob, name, info, obj)
             elif obj.fob:
@@ -382,8 +382,8 @@ class Scanner:
         self.init()
         if self.watch_mode == 'none':
             if self.scan_task:
-                self.db.execute('pragma journal_mode=NONE')
-                with self.db.ensure_transaction(): # XXX
+                #self.db.execute('pragma journal_mode=OFF')
+                #with self.db.ensure_transaction(): # XXX
                     self.loop.run_until_complete(self.scan_task)
         else:
             self.loop.run_forever()

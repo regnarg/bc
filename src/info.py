@@ -29,21 +29,21 @@ class InfoPrinter:
             self.print("No inode record")
             return
         self.print("Type:", inode.type)
-        self.print("IID: ", inode.iid)
-        self.print("FOB: ", inode.fob)
+        self.print("IID: ", binhex(inode.iid))
+        self.print("FOB: ", binhex(inode.fob))
         if inode.fob:
             with self.indented(): self.print_syncable(inode.fob, skip_type=True)
-        self.print("FLV: ", inode.flv)
+        self.print("FLV: ", binhex(inode.flv))
         if inode.flv:
             with self.indented(): self.print_syncable(inode.flv, skip_type=True)
-        self.print("FCV: ", inode.fcv)
+        self.print("FCV: ", binhex(inode.fcv))
         if inode.fcv:
             with self.indented(): self.print_syncable(inode.fcv, skip_type=True)
 
     def print_syncable(self, id, *, skip_id=True, skip_type=False):
         row = self.db.query_first('select * from syncables where id=?', id)
         if not skip_id:
-            self.print("ID:",id)
+            self.print("ID:", binhex(id))
         if not skip_type:
             self.print("Kind:", row.kind)
         origin = self.store.get_store_id(row.origin_idx)
