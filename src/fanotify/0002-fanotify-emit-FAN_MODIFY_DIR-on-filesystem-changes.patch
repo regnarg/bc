@@ -1,0 +1,611 @@
+From a7ad913cf04481b0295832e3e201159a7e66ea03 Mon Sep 17 00:00:00 2001
+Message-Id: <a7ad913cf04481b0295832e3e201159a7e66ea03.1489445257.git.p@regnarg.cz>
+In-Reply-To: <a0fa4e7890ea16e7f90a17524e817755f7dde8b5.1489445257.git.p@regnarg.cz>
+References: <a0fa4e7890ea16e7f90a17524e817755f7dde8b5.1489445257.git.p@regnarg.cz>
+From: Filip Stedronsky <r.lkml@regnarg.cz>
+Date: Mon, 13 Mar 2017 23:07:51 +0100
+Subject: [PATCH 2/2] fanotify: emit FAN_MODIFY_DIR on filesystem changes
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Besause fanotify requires `struct path`, the event cannot be generated
+directly in `fsnotify_move` and friends because they only get the inode
+(and their callers, `vfs_rename`&co. cannot supply any better info).
+So instead it needs to be generated higher in the call chain, i.e. in
+the callers of functions like `vfs_rename`.
+
+This leads to some code duplication. Currently, there are several places
+whence functions like `vfs_rename` or `vfs_unlink` are called:
+
+  * syscall handlers (done)
+  * NFS server (done)
+  * stacked filesystems
+      - ecryptfs (done)
+      - overlayfs
+        (Currently doesn't report even ordinary fanotify events, because
+         it internally clones the upper mount; not sure about the
+         rationale.  One can always watch the overlay mount instead.)
+  * few rather minor things
+      - devtmpfs
+        (its internal changes are not tied to any vfsmount so it cannot
+         emit mount-scoped events)
+      - cachefiles (done)
+      - ipc/mqueue.c (done)
+      - fs/nfsd/nfs4recover.c (done)
+      - kernel/bpf/inode.c (done)
+        net/unix/af_unix.c (done)
+
+(grep -rE '\bvfs_(rename|unlink|mknod|whiteout|create|mkdir|rmdir|symlink|link)\(')
+
+Signed-off-by: Filip Štědronský <r.lkml@regnarg.cz>
+
+---
+
+An alternative might be to create wrapper functions like
+vfs_path_(rename|unlink|...). They could also take care of calling
+security_path_(rename|unlink|...), which is currently also up to
+the indvidual callers (possibly with a flag because it might not
+be always desired).
+---
+ fs/cachefiles/namei.c |  9 +++++++
+ fs/ecryptfs/inode.c   | 67 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ fs/namei.c            | 23 +++++++++++++++++-
+ fs/nfsd/nfs4recover.c |  7 ++++++
+ fs/nfsd/vfs.c         | 24 ++++++++++++++++--
+ ipc/mqueue.c          |  9 +++++++
+ kernel/bpf/inode.c    |  3 +++
+ net/unix/af_unix.c    |  2 ++
+ 8 files changed, 141 insertions(+), 3 deletions(-)
+
+diff --git a/fs/cachefiles/namei.c b/fs/cachefiles/namei.c
+index 41df8a27d7eb..8c86699424d1 100644
+--- a/fs/cachefiles/namei.c
++++ b/fs/cachefiles/namei.c
+@@ -313,6 +313,8 @@ static int cachefiles_bury_object(struct cachefiles_cache *cache,
+ 			cachefiles_io_error(cache, "Unlink security error");
+ 		} else {
+ 			ret = vfs_unlink(d_inode(dir), rep, NULL);
++			if (ret == 0)
++				fsnotify_modify_dir(&path);
+ 
+ 			if (preemptive)
+ 				cachefiles_mark_object_buried(cache, rep, why);
+@@ -418,6 +420,10 @@ static int cachefiles_bury_object(struct cachefiles_cache *cache,
+ 		if (ret != 0 && ret != -ENOMEM)
+ 			cachefiles_io_error(cache,
+ 					    "Rename failed with error %d", ret);
++		if (ret == 0) {
++			fsnotify_modify_dir(&path);
++			fsnotify_modify_dir(&path_to_graveyard);
++		}
+ 
+ 		if (preemptive)
+ 			cachefiles_mark_object_buried(cache, rep, why);
+@@ -560,6 +566,7 @@ int cachefiles_walk_to_object(struct cachefiles_object *parent,
+ 			cachefiles_hist(cachefiles_mkdir_histogram, start);
+ 			if (ret < 0)
+ 				goto create_error;
++			fsnotify_modify_dir(&path);
+ 
+ 			ASSERT(d_backing_inode(next));
+ 
+@@ -589,6 +596,7 @@ int cachefiles_walk_to_object(struct cachefiles_object *parent,
+ 			cachefiles_hist(cachefiles_create_histogram, start);
+ 			if (ret < 0)
+ 				goto create_error;
++			fsnotify_modify_dir(&path);
+ 
+ 			ASSERT(d_backing_inode(next));
+ 
+@@ -779,6 +787,7 @@ struct dentry *cachefiles_get_directory(struct cachefiles_cache *cache,
+ 		ret = vfs_mkdir(d_inode(dir), subdir, 0700);
+ 		if (ret < 0)
+ 			goto mkdir_error;
++		fsnotify_modify_dir(&path);
+ 
+ 		ASSERT(d_backing_inode(subdir));
+ 
+diff --git a/fs/ecryptfs/inode.c b/fs/ecryptfs/inode.c
+index e7413f82d27b..88a41b270bcc 100644
+--- a/fs/ecryptfs/inode.c
++++ b/fs/ecryptfs/inode.c
+@@ -29,6 +29,8 @@
+ #include <linux/dcache.h>
+ #include <linux/namei.h>
+ #include <linux/mount.h>
++#include <linux/path.h>
++#include <linux/fsnotify.h>
+ #include <linux/fs_stack.h>
+ #include <linux/slab.h>
+ #include <linux/xattr.h>
+@@ -144,16 +146,22 @@ static int ecryptfs_do_unlink(struct inode *dir, struct dentry *dentry,
+ {
+ 	struct dentry *lower_dentry = ecryptfs_dentry_to_lower(dentry);
+ 	struct inode *lower_dir_inode = ecryptfs_inode_to_lower(dir);
++	struct vfsmount *lower_mnt = ecryptfs_dentry_to_lower_mnt(dentry);
++	struct path lower_dir_path = {lower_mnt, NULL};
+ 	struct dentry *lower_dir_dentry;
+ 	int rc;
+ 
+ 	dget(lower_dentry);
+ 	lower_dir_dentry = lock_parent(lower_dentry);
++	lower_dir_path.dentry = lower_dir_dentry;
+ 	rc = vfs_unlink(lower_dir_inode, lower_dentry, NULL);
+ 	if (rc) {
+ 		printk(KERN_ERR "Error in vfs_unlink; rc = [%d]\n", rc);
+ 		goto out_unlock;
+ 	}
++
++	fsnotify_modify_dir(&lower_dir_path);
++
+ 	fsstack_copy_attr_times(dir, lower_dir_inode);
+ 	set_nlink(inode, ecryptfs_inode_to_lower(inode)->i_nlink);
+ 	inode->i_ctime = dir->i_ctime;
+@@ -184,9 +192,13 @@ ecryptfs_do_create(struct inode *directory_inode,
+ 	struct dentry *lower_dentry;
+ 	struct dentry *lower_dir_dentry;
+ 	struct inode *inode;
++	struct path lower_dir_path;
+ 
+ 	lower_dentry = ecryptfs_dentry_to_lower(ecryptfs_dentry);
+ 	lower_dir_dentry = lock_parent(lower_dentry);
++	lower_dir_path.dentry = lower_dir_dentry;
++	lower_dir_path.mnt = ecryptfs_dentry_to_lower_mnt(ecryptfs_dentry);
++
+ 	rc = vfs_create(d_inode(lower_dir_dentry), lower_dentry, mode, true);
+ 	if (rc) {
+ 		printk(KERN_ERR "%s: Failure to create dentry in lower fs; "
+@@ -194,10 +206,14 @@ ecryptfs_do_create(struct inode *directory_inode,
+ 		inode = ERR_PTR(rc);
+ 		goto out_lock;
+ 	}
++
++	fsnotify_modify_dir(&lower_dir_path);
++
+ 	inode = __ecryptfs_get_inode(d_inode(lower_dentry),
+ 				     directory_inode->i_sb);
+ 	if (IS_ERR(inode)) {
+ 		vfs_unlink(d_inode(lower_dir_dentry), lower_dentry, NULL);
++		fsnotify_modify_dir(&lower_dir_path);
+ 		goto out_lock;
+ 	}
+ 	fsstack_copy_attr_times(directory_inode, d_inode(lower_dir_dentry));
+@@ -432,6 +448,7 @@ static int ecryptfs_link(struct dentry *old_dentry, struct inode *dir,
+ 	struct dentry *lower_old_dentry;
+ 	struct dentry *lower_new_dentry;
+ 	struct dentry *lower_dir_dentry;
++	struct path lower_dir_path;
+ 	u64 file_size_save;
+ 	int rc;
+ 
+@@ -441,10 +458,16 @@ static int ecryptfs_link(struct dentry *old_dentry, struct inode *dir,
+ 	dget(lower_old_dentry);
+ 	dget(lower_new_dentry);
+ 	lower_dir_dentry = lock_parent(lower_new_dentry);
++	lower_dir_path.dentry = lower_dir_dentry;
++	lower_dir_path.mnt = ecryptfs_dentry_to_lower_mnt(new_dentry);
++
+ 	rc = vfs_link(lower_old_dentry, d_inode(lower_dir_dentry),
+ 		      lower_new_dentry, NULL);
+ 	if (rc || d_really_is_negative(lower_new_dentry))
+ 		goto out_lock;
++
++	fsnotify_modify_dir(&lower_dir_path);
++
+ 	rc = ecryptfs_interpose(lower_new_dentry, new_dentry, dir->i_sb);
+ 	if (rc)
+ 		goto out_lock;
+@@ -471,6 +494,7 @@ static int ecryptfs_symlink(struct inode *dir, struct dentry *dentry,
+ 	int rc;
+ 	struct dentry *lower_dentry;
+ 	struct dentry *lower_dir_dentry;
++	struct path lower_dir_path;
+ 	char *encoded_symname;
+ 	size_t encoded_symlen;
+ 	struct ecryptfs_mount_crypt_stat *mount_crypt_stat = NULL;
+@@ -478,6 +502,9 @@ static int ecryptfs_symlink(struct inode *dir, struct dentry *dentry,
+ 	lower_dentry = ecryptfs_dentry_to_lower(dentry);
+ 	dget(lower_dentry);
+ 	lower_dir_dentry = lock_parent(lower_dentry);
++	lower_dir_path.dentry = lower_dir_dentry;
++	lower_dir_path.mnt = ecryptfs_dentry_to_lower_mnt(dentry);
++
+ 	mount_crypt_stat = &ecryptfs_superblock_to_private(
+ 		dir->i_sb)->mount_crypt_stat;
+ 	rc = ecryptfs_encrypt_and_encode_filename(&encoded_symname,
+@@ -491,6 +518,9 @@ static int ecryptfs_symlink(struct inode *dir, struct dentry *dentry,
+ 	kfree(encoded_symname);
+ 	if (rc || d_really_is_negative(lower_dentry))
+ 		goto out_lock;
++
++	fsnotify_modify_dir(&lower_dir_path);
++
+ 	rc = ecryptfs_interpose(lower_dentry, dentry, dir->i_sb);
+ 	if (rc)
+ 		goto out_lock;
+@@ -509,12 +539,18 @@ static int ecryptfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
+ 	int rc;
+ 	struct dentry *lower_dentry;
+ 	struct dentry *lower_dir_dentry;
++	struct path lower_dir_path;
+ 
+ 	lower_dentry = ecryptfs_dentry_to_lower(dentry);
+ 	lower_dir_dentry = lock_parent(lower_dentry);
++	lower_dir_path.dentry = lower_dir_dentry;
++	lower_dir_path.mnt = ecryptfs_dentry_to_lower_mnt(dentry);
+ 	rc = vfs_mkdir(d_inode(lower_dir_dentry), lower_dentry, mode);
+ 	if (rc || d_really_is_negative(lower_dentry))
+ 		goto out;
++
++	fsnotify_modify_dir(&lower_dir_path);
++
+ 	rc = ecryptfs_interpose(lower_dentry, dentry, dir->i_sb);
+ 	if (rc)
+ 		goto out;
+@@ -532,16 +568,24 @@ static int ecryptfs_rmdir(struct inode *dir, struct dentry *dentry)
+ {
+ 	struct dentry *lower_dentry;
+ 	struct dentry *lower_dir_dentry;
++	struct path lower_dir_path;
+ 	int rc;
+ 
+ 	lower_dentry = ecryptfs_dentry_to_lower(dentry);
+ 	dget(dentry);
+ 	lower_dir_dentry = lock_parent(lower_dentry);
++	lower_dir_path.dentry = lower_dir_dentry;
++	lower_dir_path.mnt = ecryptfs_dentry_to_lower_mnt(dentry);
+ 	dget(lower_dentry);
++
+ 	rc = vfs_rmdir(d_inode(lower_dir_dentry), lower_dentry);
+ 	dput(lower_dentry);
+ 	if (!rc && d_really_is_positive(dentry))
+ 		clear_nlink(d_inode(dentry));
++
++	if (rc)
++		fsnotify_modify_dir(&lower_dir_path);
++
+ 	fsstack_copy_attr_times(dir, d_inode(lower_dir_dentry));
+ 	set_nlink(dir, d_inode(lower_dir_dentry)->i_nlink);
+ 	unlock_dir(lower_dir_dentry);
+@@ -557,12 +601,19 @@ ecryptfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev
+ 	int rc;
+ 	struct dentry *lower_dentry;
+ 	struct dentry *lower_dir_dentry;
++	struct path lower_dir_path;
+ 
+ 	lower_dentry = ecryptfs_dentry_to_lower(dentry);
+ 	lower_dir_dentry = lock_parent(lower_dentry);
++	lower_dir_path.dentry = lower_dir_dentry;
++	lower_dir_path.mnt = ecryptfs_dentry_to_lower_mnt(dentry);
++
+ 	rc = vfs_mknod(d_inode(lower_dir_dentry), lower_dentry, mode, dev);
+ 	if (rc || d_really_is_negative(lower_dentry))
+ 		goto out;
++
++	fsnotify_modify_dir(&lower_dir_path);
++
+ 	rc = ecryptfs_interpose(lower_dentry, dentry, dir->i_sb);
+ 	if (rc)
+ 		goto out;
+@@ -585,6 +636,9 @@ ecryptfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+ 	struct dentry *lower_new_dentry;
+ 	struct dentry *lower_old_dir_dentry;
+ 	struct dentry *lower_new_dir_dentry;
++	struct vfsmount *lower_mnt;
++	struct path lower_old_dir_path;
++	struct path lower_new_dir_path;
+ 	struct dentry *trap = NULL;
+ 	struct inode *target_inode;
+ 
+@@ -593,10 +647,15 @@ ecryptfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+ 
+ 	lower_old_dentry = ecryptfs_dentry_to_lower(old_dentry);
+ 	lower_new_dentry = ecryptfs_dentry_to_lower(new_dentry);
++	lower_mnt = ecryptfs_dentry_to_lower_mnt(old_dentry);
+ 	dget(lower_old_dentry);
+ 	dget(lower_new_dentry);
+ 	lower_old_dir_dentry = dget_parent(lower_old_dentry);
+ 	lower_new_dir_dentry = dget_parent(lower_new_dentry);
++	lower_old_dir_path.dentry = lower_old_dir_dentry;
++	lower_old_dir_path.mnt = lower_mnt;
++	lower_new_dir_path.dentry = lower_new_dir_dentry;
++	lower_new_dir_path.mnt = lower_mnt;
+ 	target_inode = d_inode(new_dentry);
+ 	trap = lock_rename(lower_old_dir_dentry, lower_new_dir_dentry);
+ 	/* source should not be ancestor of target */
+@@ -614,6 +673,14 @@ ecryptfs_rename(struct inode *old_dir, struct dentry *old_dentry,
+ 			NULL, 0);
+ 	if (rc)
+ 		goto out_lock;
++
++	/* ecryptfs does not support crossing mount boundaries, we can take
++	 * vfsmount from an arbitrary dentry.
++	 */
++	fsnotify_modify_dir(&lower_old_dir_path);
++	if (!path_equal(&lower_old_dir_path, &lower_new_dir_path))
++		fsnotify_modify_dir(&lower_new_dir_path);
++
+ 	if (target_inode)
+ 		fsstack_copy_attr_all(target_inode,
+ 				      ecryptfs_inode_to_lower(target_inode));
+diff --git a/fs/namei.c b/fs/namei.c
+index ad74877e1442..17667f0c89e5 100644
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -3009,8 +3009,12 @@ static int atomic_open(struct nameidata *nd, struct dentry *dentry,
+ 				dput(dentry);
+ 				dentry = file->f_path.dentry;
+ 			}
+-			if (*opened & FILE_CREATED)
++			if (*opened & FILE_CREATED) {
++				struct path parent_path = {file->f_path.mnt,
++							dentry->d_parent};
+ 				fsnotify_create(dir, dentry);
++				fsnotify_modify_dir(&parent_path);
++			}
+ 			if (unlikely(d_is_negative(dentry))) {
+ 				error = -ENOENT;
+ 			} else {
+@@ -3157,6 +3161,7 @@ static int lookup_open(struct nameidata *nd, struct path *path,
+ 		if (error)
+ 			goto out_dput;
+ 		fsnotify_create(dir_inode, dentry);
++		fsnotify_modify_dir(&nd->path);
+ 	}
+ 	if (unlikely(create_error) && !dentry->d_inode) {
+ 		error = create_error;
+@@ -3702,6 +3707,7 @@ SYSCALL_DEFINE4(mknodat, int, dfd, const char __user *, filename, umode_t, mode,
+ 			error = vfs_mknod(path.dentry->d_inode,dentry,mode,0);
+ 			break;
+ 	}
++	fsnotify_modify_dir(&path);
+ out:
+ 	done_path_create(&path, dentry);
+ 	if (retry_estale(error, lookup_flags)) {
+@@ -3759,6 +3765,8 @@ SYSCALL_DEFINE3(mkdirat, int, dfd, const char __user *, pathname, umode_t, mode)
+ 	error = security_path_mkdir(&path, dentry, mode);
+ 	if (!error)
+ 		error = vfs_mkdir(path.dentry->d_inode, dentry, mode);
++	if (!error)
++		fsnotify_modify_dir(&path);
+ 	done_path_create(&path, dentry);
+ 	if (retry_estale(error, lookup_flags)) {
+ 		lookup_flags |= LOOKUP_REVAL;
+@@ -3855,6 +3863,8 @@ static long do_rmdir(int dfd, const char __user *pathname)
+ 	if (error)
+ 		goto exit3;
+ 	error = vfs_rmdir(path.dentry->d_inode, dentry);
++	if (!error)
++		fsnotify_modify_dir(&path);
+ exit3:
+ 	dput(dentry);
+ exit2:
+@@ -3979,6 +3989,8 @@ static long do_unlinkat(int dfd, const char __user *pathname)
+ 		if (error)
+ 			goto exit2;
+ 		error = vfs_unlink(path.dentry->d_inode, dentry, &delegated_inode);
++		if (!error)
++			fsnotify_modify_dir(&path);
+ exit2:
+ 		dput(dentry);
+ 	}
+@@ -4070,6 +4082,8 @@ SYSCALL_DEFINE3(symlinkat, const char __user *, oldname,
+ 	error = security_path_symlink(&path, dentry, from->name);
+ 	if (!error)
+ 		error = vfs_symlink(path.dentry->d_inode, dentry, from->name);
++	if (!error)
++		fsnotify_modify_dir(&path);
+ 	done_path_create(&path, dentry);
+ 	if (retry_estale(error, lookup_flags)) {
+ 		lookup_flags |= LOOKUP_REVAL;
+@@ -4219,6 +4233,8 @@ SYSCALL_DEFINE5(linkat, int, olddfd, const char __user *, oldname,
+ 	if (error)
+ 		goto out_dput;
+ 	error = vfs_link(old_path.dentry, new_path.dentry->d_inode, new_dentry, &delegated_inode);
++	if (!error)
++		fsnotify_modify_dir(&new_path);
+ out_dput:
+ 	done_path_create(&new_path, new_dentry);
+ 	if (delegated_inode) {
+@@ -4532,6 +4548,11 @@ SYSCALL_DEFINE5(renameat2, int, olddfd, const char __user *, oldname,
+ 	error = vfs_rename(old_path.dentry->d_inode, old_dentry,
+ 			   new_path.dentry->d_inode, new_dentry,
+ 			   &delegated_inode, flags);
++	if (error == 0) {
++		fsnotify_modify_dir(&old_path);
++		if (!path_equal(&old_path, &new_path))
++			fsnotify_modify_dir(&new_path);
++	}
+ exit5:
+ 	dput(new_dentry);
+ exit4:
+diff --git a/fs/nfsd/nfs4recover.c b/fs/nfsd/nfs4recover.c
+index 66eaeb1e8c2c..58f70bbaac38 100644
+--- a/fs/nfsd/nfs4recover.c
++++ b/fs/nfsd/nfs4recover.c
+@@ -36,6 +36,7 @@
+ #include <linux/file.h>
+ #include <linux/slab.h>
+ #include <linux/namei.h>
++#include <linux/fsnotify.h>
+ #include <linux/sched.h>
+ #include <linux/fs.h>
+ #include <linux/module.h>
+@@ -216,6 +217,8 @@ nfsd4_create_clid_dir(struct nfs4_client *clp)
+ 		 */
+ 		goto out_put;
+ 	status = vfs_mkdir(d_inode(dir), dentry, S_IRWXU);
++	if (status == 0)
++		fsnotify_modify_dir(&nn->rec_file->f_path);
+ out_put:
+ 	dput(dentry);
+ out_unlock:
+@@ -338,6 +341,8 @@ nfsd4_unlink_clid_dir(char *name, int namlen, struct nfsd_net *nn)
+ 	if (d_really_is_negative(dentry))
+ 		goto out;
+ 	status = vfs_rmdir(d_inode(dir), dentry);
++	if (status == 0)
++		fsnotify_modify_dir(&nn->rec_file->f_path);
+ out:
+ 	dput(dentry);
+ out_unlock:
+@@ -401,6 +406,8 @@ purge_old(struct dentry *parent, struct dentry *child, struct nfsd_net *nn)
+ 	if (status)
+ 		printk("failed to remove client recovery directory %pd\n",
+ 				child);
++	else
++		fsnotify_modify_dir(&nn->rec_file->f_path);
+ 	/* Keep trying, success or failure: */
+ 	return 0;
+ }
+diff --git a/fs/nfsd/vfs.c b/fs/nfsd/vfs.c
+index 26c6fdb4bf67..7632ab3fd99e 100644
+--- a/fs/nfsd/vfs.c
++++ b/fs/nfsd/vfs.c
+@@ -364,6 +364,18 @@ nfsd_get_write_access(struct svc_rqst *rqstp, struct svc_fh *fhp,
+ }
+ 
+ /*
++ * Helper to emit fsnotify modify_dir event. Call with fph locked.
++ */
++static void nfsd_fsnotify_modify_dir(struct svc_fh *fhp)
++{
++	struct path path;
++
++	path.mnt = fhp->fh_export->ex_path.mnt;
++	path.dentry = fhp->fh_dentry;
++	fsnotify_modify_dir(&path);
++}
++
++/*
+  * Set various file attributes.  After this call fhp needs an fh_put.
+  */
+ __be32
+@@ -1207,6 +1219,7 @@ nfsd_create_locked(struct svc_rqst *rqstp, struct svc_fh *fhp,
+ 		goto out_nfserr;
+ 
+ 	err = nfsd_create_setattr(rqstp, resfhp, iap);
++	nfsd_fsnotify_modify_dir(fhp);
+ 
+ 	/*
+ 	 * nfsd_create_setattr already committed the child.  Transactional
+@@ -1525,8 +1538,10 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
+ 
+ 	host_err = vfs_symlink(d_inode(dentry), dnew, path);
+ 	err = nfserrno(host_err);
+-	if (!err)
++	if (!err) {
++		nfsd_fsnotify_modify_dir(fhp);
+ 		err = nfserrno(commit_metadata(fhp));
++	}
+ 	fh_unlock(fhp);
+ 
+ 	fh_drop_write(fhp);
+@@ -1593,6 +1608,7 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
+ 		goto out_dput;
+ 	host_err = vfs_link(dold, dirp, dnew, NULL);
+ 	if (!host_err) {
++		nfsd_fsnotify_modify_dir(tfhp);
+ 		err = nfserrno(commit_metadata(ffhp));
+ 		if (!err)
+ 			err = nfserrno(commit_metadata(tfhp));
+@@ -1686,6 +1702,8 @@ nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
+ 
+ 	host_err = vfs_rename(fdir, odentry, tdir, ndentry, NULL, 0);
+ 	if (!host_err) {
++		nfsd_fsnotify_modify_dir(tfhp);
++		nfsd_fsnotify_modify_dir(ffhp);
+ 		host_err = commit_metadata(tfhp);
+ 		if (!host_err)
+ 			host_err = commit_metadata(ffhp);
+@@ -1757,8 +1775,10 @@ nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
+ 		host_err = vfs_unlink(dirp, rdentry, NULL);
+ 	else
+ 		host_err = vfs_rmdir(dirp, rdentry);
+-	if (!host_err)
++	if (!host_err) {
++		nfsd_fsnotify_modify_dir(fhp);
+ 		host_err = commit_metadata(fhp);
++	}
+ 	dput(rdentry);
+ 
+ out_nfserr:
+diff --git a/ipc/mqueue.c b/ipc/mqueue.c
+index 7a2d8f0c8ae5..10e413c2216f 100644
+--- a/ipc/mqueue.c
++++ b/ipc/mqueue.c
+@@ -19,6 +19,7 @@
+ #include <linux/file.h>
+ #include <linux/mount.h>
+ #include <linux/namei.h>
++#include <linux/fsnotify.h>
+ #include <linux/sysctl.h>
+ #include <linux/poll.h>
+ #include <linux/mqueue.h>
+@@ -818,6 +819,10 @@ SYSCALL_DEFINE4(mq_open, const char __user *, u_name, int, oflag, umode_t, mode,
+ 			filp = do_create(ipc_ns, d_inode(root),
+ 						&path, oflag, mode,
+ 						u_attr ? &attr : NULL);
++			if (!IS_ERR(filp)) {
++				struct path root_path = {mnt, mnt->mnt_root};
++				fsnotify_modify_dir(&root_path);
++			}
+ 		}
+ 	} else {
+ 		if (d_really_is_negative(path.dentry)) {
+@@ -878,6 +883,10 @@ SYSCALL_DEFINE1(mq_unlink, const char __user *, u_name)
+ 	} else {
+ 		ihold(inode);
+ 		err = vfs_unlink(d_inode(dentry->d_parent), dentry, NULL);
++		if (!err) {
++			struct path path = {mnt, dentry->d_parent};
++			fsnotify_modify_dir(&path);
++		}
+ 	}
+ 	dput(dentry);
+ 
+diff --git a/kernel/bpf/inode.c b/kernel/bpf/inode.c
+index 0b030c9126d3..93137292b051 100644
+--- a/kernel/bpf/inode.c
++++ b/kernel/bpf/inode.c
+@@ -16,6 +16,7 @@
+ #include <linux/major.h>
+ #include <linux/mount.h>
+ #include <linux/namei.h>
++#include <linux/fsnotify.h>
+ #include <linux/fs.h>
+ #include <linux/kdev_t.h>
+ #include <linux/parser.h>
+@@ -255,6 +256,8 @@ static int bpf_obj_do_pin(const struct filename *pathname, void *raw,
+ 
+ 	dentry->d_fsdata = raw;
+ 	ret = vfs_mknod(dir, dentry, mode, devt);
++	if (ret == 0)
++		fsnotify_modify_dir(&path);
+ 	dentry->d_fsdata = NULL;
+ out:
+ 	done_path_create(&path, dentry);
+diff --git a/net/unix/af_unix.c b/net/unix/af_unix.c
+index cef79873b09d..5049bd4bd1d8 100644
+--- a/net/unix/af_unix.c
++++ b/net/unix/af_unix.c
+@@ -91,6 +91,7 @@
+ #include <linux/stat.h>
+ #include <linux/dcache.h>
+ #include <linux/namei.h>
++#include <linux/fsnotify.h>
+ #include <linux/socket.h>
+ #include <linux/un.h>
+ #include <linux/fcntl.h>
+@@ -976,6 +977,7 @@ static int unix_mknod(const char *sun_path, umode_t mode, struct path *res)
+ 	if (!err) {
+ 		err = vfs_mknod(d_inode(path.dentry), dentry, mode, 0);
+ 		if (!err) {
++			fsnotify_modify_dir(&path);
+ 			res->mnt = mntget(path.mnt);
+ 			res->dentry = dget(dentry);
+ 		}
+-- 
+2.11.1
+
