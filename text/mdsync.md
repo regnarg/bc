@@ -356,7 +356,7 @@ We could omit them completely and offer some specialized tools (called perhaps `
 `filoco-tree`, etc.) to list the locally missing files. However, this seems rather inconvenient.
 We opted for a different method, and that is to represent them with a special kind of
 inode. The best choice seems to be a broken symlink, i.e., one with a nonexistent target
-(`/!/filoco-missing`) in our case.
+(`/!/filoco-missing` in our case).
 
 This has several advantages:
 

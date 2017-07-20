@@ -9,7 +9,7 @@ detecting filesystem changes efficiently.
 There are two broad categories of filesystem change detection methods.
 
 \D{Offline change detection} consists of actively comparing the filesystem
-state to a previous state. The detection must be explicitly initiated by the
+state to known a previous state. The detection must be explicitly initiated by the
 application at an arbitrarily chosen time, e.g. regulary (every day at midnight)
 or upon user request. It can be considered a form of active polling.
 
@@ -104,26 +104,26 @@ directories store a reference to their parent (as a special directory entry call
 This explains many otherwise perplexing (especially for newcomers to the Unix world)
 facts:
 
-\newcommand{\pfact}[2]{\noindent \textbf{Perplexing fact:} #1\\\textbf{Explanation:} #2}
+\newcommand{\pfact}[3]{\noindent \textbf{Perplexing fact \##1:} #2\\\textbf{Explanation:} #3}
 
-  * \pfact{The syscall used to delete a file is called `unlink`.}
+  * \pfact{1}{The syscall used to delete a file is called {\tt unlink}.}
     {It does not in fact delete
     a file (inode), but merely removes one link to it. Only when all links to
     an inode are removed, it is deleted.}
 
-  * \pfact{It is possible to delete a file that is opened by
+  * \pfact{2}{It is possible to delete a file that is opened by
     a process. That process can happily continue using the file.}
     {Inodes in kernel are reference counted. Only when all in-kernel
     references to the inode are gone \textit{and} the inode has no links, it is physically
     deleted.}
 
-  * \pfact{To rename or delete a file, you do not need write
+  * \pfact{3}{To rename or delete a file, you do not need write
     permissions (or in fact, any permissions) to that file, only to the parent directory.}
     {These operations do not touch the file inode
     at all, they change only the parent directory contents (by adding/removing directory
     entries).}
 
-  * \pfact{Renaming a file updates the last modification time
+  * \pfact{4}{Renaming a file updates the last modification time
     of the parent directory, not the file.}
     {Same as above.}
 
@@ -141,17 +141,17 @@ at least three related but distinct things:
     some filesystems do not internally have any concept of inodes, especially non-Unix
     filesystem like FAT.
 
-Each inode (in all the three senses) has a unique identifier called the \D{inode number}
+Each inode (in all the three senses) has a unique (within the scope of a single filesystem
+volume) identifier called the \D{inode number}
 (*ino* for short) that can be read from userspace.
 
 #### Filesystem Access Syscalls
 
 Most filesystem syscalls take string paths as an argument. The inode corresponding to the
 path is found in the kernel using a process called \D{path resolution}.
-\TODO{link manpage}
 The kernel starts at the root inode and for each component of the path walks down the
 corresponding directory entry. This process is inherently non-atomic and if files are
-renamed during path resolution, you might get unexpected results.
+renamed during path resolution, you might get unexpected results. \cite{path_resolution}
 
 The most important syscalls include:
 
@@ -176,12 +176,12 @@ The most important syscalls include:
 When desiring to access the *content* of inodes (e.g. read/write a file or list a directory),
 you must first *open* the inode with an `open`(*path*, *flags*) syscall. `open` resolves
 *path* into an inode and creates an \D{open file description} (OFD, `struct file`) structure
-in the kernel, which holds information about the open file like the current seek poisition
+in the kernel, which holds information about the open file like the current seek position
 or whether it was opened read only. The OFD is tied to the *inode* so that it points always
 to the same inode even if the file is renamed or unlinked while it is opened.
 
 The application
-gets returned a \D{file descriptor} that is used to refer to the OFD in all subsequent
+gets returned a \D{file descriptor}, a small integer that is used to refer to the OFD in all subsequent
 operations on the opened file. The most common operations are `read`, `write` and `close`,
 with the obvious meanings, and `fstat`, which does a `lstat` on the file's inode without
 any path resolution.
@@ -205,8 +205,9 @@ slow, as they have to read the complete content of each file.  This is
 unfortunate as today's file collections often contain many large files that
 rarely ever change (e.g. audio and video files).
 
-A more viable alternative takes inspiration from the famous `rsync` \TODO{link}
-file transfer program. It consists of storing the size and last modification
+A more viable alternative takes inspiration from 'quick check' algorithm used
+by the famous `rsync`
+file transfer program. \cite{rsync_man} It consists of storing the size and last modification
 time (*mtime*) of each file and comparing those. This may be unreliable for
 several reasons:
 
@@ -247,9 +248,7 @@ renamed during scanning:
     duration of the `getdents` so everything returned by one call should
     be consistent. However, a rename may happen between two `getdents`
     calls. In that case, it is not defined whether we will see the old name,
-    the new name, both or neither.
-    \TODO{Cite http://yarchive.net/comp/linux/readdir\_nonatomicity.html
-    or a more direct LKML archive}
+    the new name, both or neither. \cite{readdir_nonatom}
     The last case is particulary unpleasant because we might mistakenly mark
     a renamed file as deleted.
 
@@ -343,15 +342,15 @@ example, is not.
 File handles are usually used by the in-kernel NFS server. But they can also be
 accessed from userspace using two simple syscalls: `name_to_handle_at` returns
 the handle corresponding to a path or file descriptor.  `open_by_handle_at`
-\TODO{link manpage} finds the inode corresponding to the handle, if it still
+finds the inode corresponding to the handle, if it still
 exists, and returns a file descriptor referring to it. If the inode no longer
 exists, the `ESTALE` error is reported. These syscalls were created to
 facilitate implementation of userspace NFS servers. We shall (ab)use them in
-rather unusual ways.
+rather unusual ways. \cite{fhandle_man}
 
 Being non-reusable, file handles seem like a good candidate for persistent inode
 identifiers. However, there is a different problem. The NFS specification does
-not guarantee that the same handle for a given inode every time. \TODO{citation}
+not guarantee that the same handle for a given inode every time. \cite[p. 21]{nfs-rfc}
 I.e., it is possible for multiple different handles to refer to the same inode,
 which prevents us from simply comparing handles as strings or using them as
 lookup keys in internal databases.
@@ -427,9 +426,7 @@ could not do much better than this.
 This problem is aggravated by the structure of the ext4 filesystem. In ext4,
 the disk is split into equally-sized regions called \D{block groups}. Each
 block group contains both inode metadata and data blocks for a set of files.
-\TODO{block groups ref:
-%https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/tree/Documentation/filesystems/ext2.txt?id=c290ea01abb7907fde602f3ba55905ef10a37477\#n85
-}
+\cite{blockgroups}
 
 ![ext4 block group layout (not to scale)\label{bg}](img/blockgroup.pdf){#fig:bg}
 
@@ -538,7 +535,7 @@ support of the filesystem (e.g. in the form of atomic snapshots).
 
 ### Inotify
 
-Inotify\TODO{link manpage} is the most widely used Linux filesystem monitoring API.
+Inotify\cite{inotify} is the most widely used Linux filesystem monitoring API.
 It is currently used by virtually all applications that wish to detect filesystem
 changes: synchronization tools, indexers and similar.
 
