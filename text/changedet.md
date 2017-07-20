@@ -9,7 +9,7 @@ detecting filesystem changes efficiently.
 There are two broad categories of filesystem change detection methods.
 
 \D{Offline change detection} consists of actively comparing the filesystem
-state to known a previous state. The detection must be explicitly initiated by the
+state to a known previous state. The detection must be explicitly initiated by the
 application at an arbitrarily chosen time, e.g. regulary (every day at midnight)
 or upon user request. It can be considered a form of active polling.
 
@@ -43,30 +43,31 @@ see later.
 
 There also emerges an interesting middle ground between these two extremes,
 which we shall dub \D{filesystem-based change detection}.  Some filesystems
-offer an explicit *compare* operation that is more efficient than scanning the
-whole trees. This is usually done in one of two ways.
-
-One is to store file metadata on disk in data structures that allow for
-efficient comparison. For example, btrfs uses persistent B-trees
-for its snapshots that allows comparing two snapshots in logarithmic time.
-\TODO{Check, cite.} The other way is to store an explicit change log as a part
-of the on-disk filesystem representation. This requires more space but allows
-answering change queries in time linear in the number of changes.
+can store some data about their change history as a part of their on-disk
+data stractures and offer operations that query these structures to return
+information about filesystem changes. Two examples of this are the `btrfs`
+find-new and send-receive mechanisms.
 
 This last category seems to offer the best of both worlds: we get reliably and
 efficiently informed of all changes. Often the comparison operation is fast
-enough to be run e.g. every minute, effectively replacing online detection. The
+enough to be run very frequently, for example every minute, effectively replacing online detection. The
 obvious disadvantages are that most filesystems do not support such operations
 and the need for a solution specifically tailored to each filesystem that does
 support change detection (there is no generic API, at least on Linux).
 
 The next sections will survey various ways of doing each kind of change detection
-on Linux.
+on Linux. Even methods that are not inherently filesystem-based will often depend
+on the idiosynchracies of different filesystem types. In such cases, we will
+consider primarily `ext4` and `btrfs`, two commonly used Linux filesystems, while
+remarking how other file systems may differ. For simplicity, we shall also only
+discuss change detection in trees contrained to a single filesystem volume (i.e.,
+not containing any mount points within them), therefore also to a single filesystem
+type.
 
 Offline Change Detection
 ------------------------
 
-### The Anatomy of Linux Filesystems
+### The anatomy of linux filesystems
 
 Before diving into change detection, we have to understand a bit about the structure
 of Linux filesystems and filesystem APIs. If terms like *inode*, *hardlink*,
@@ -76,7 +77,7 @@ however, some details might be specific to Linux.
 
 
 <!-- Describe VFS and mounts first? -->
-#### Inodes and Links
+#### Inodes and links
 
 The basic unit of a Linux filesystem is an \D{inode}. An inode represents one filesystem
 object: e.g. a file, a directory, or a symbolic link. There are a few more esoteric inode
@@ -87,9 +88,9 @@ The inode serves as a logical identifier for the given filesystem object. It als
 most of its metadata: size, permissions, last modification time. However, **an inode does
 not store its own name.**
 
-The names are instead stored in the parent directory. The content of
-a directory can be tought of as a mapping from names to inodes of its direct
-children. The elements of this mapping are called *directory entries*.
+The names are instead stored in structures belonging to the parent directory. A directory
+can be thought of as special kind of file whose content is a mapping from names to inodes
+of its direct children. The elements of this mapping are called *directory entries*.
 
 This implies that an inode can have multiple names if multiple directory entries
 reference the same inode. These names are usually called *hardlinks* or simply
@@ -128,15 +129,14 @@ facts:
     {Same as above.}
 
 
-\noindent
 We should also clarify that the term *inode* is actually a little overloaded. It can mean
 at least three related but distinct things:
 
-  * A purely logical conept that helps us to talk about filesystem structure and behaviour.
-  * A kernel in-memory structure (`struct inode`) that identifies a file object and
+  * A purely logical concept that helps us to talk about filesystem structure and behaviour.
+  * A kernel in-memory structure (`struct inode`) that identifies a filesystem object and
     holds its metadata. These structures are kept in memory as a part of the *inode cache*
     to speed up file access.
-  * An filesystem-specific on-disk structure used to hold file object metadata and usually
+  * An filesystem-specific on-disk data structure used to hold file object metadata and usually
     also information about the location of the file's data blocks on the disk. However,
     some filesystems do not internally have any concept of inodes, especially non-Unix
     filesystem like FAT.
@@ -145,9 +145,9 @@ Each inode (in all the three senses) has a unique (within the scope of a single 
 volume) identifier called the \D{inode number}
 (*ino* for short) that can be read from userspace.
 
-#### Filesystem Access Syscalls
+#### Filesystem access syscalls
 
-Most filesystem syscalls take string paths as an argument. The inode corresponding to the
+Most filesystem syscalls take string paths as their arguments. The inode corresponding to the
 path is found in the kernel using a process called \D{path resolution}.
 The kernel starts at the root inode and for each component of the path walks down the
 corresponding directory entry. This process is inherently non-atomic and if files are
@@ -186,7 +186,8 @@ operations on the opened file. The most common operations are `read`, `write` an
 with the obvious meanings, and `fstat`, which does a `lstat` on the file's inode without
 any path resolution.
 
-Apart from listing directory contents, directory file descriptors can be used as anchors
+One can also `open` a directory and obtain a file descriptor referring to it.
+Apart from listing directory contents, this file descriptor can be used as an anchor
 for path resolution. To this end, Linux offers so-called \D{at-syscalls} (`openat`,
 `renameat`,
 etc.), that instead of one path argument take two arguments: a directory file descriptor
@@ -195,13 +196,13 @@ but at the inode referenced by the file descriptor. Thus userspace applications 
 directory file descriptors as "pointers to inodes". This will later prove crucial
 in elliminating many race conditions.
 
-### Change Detection in a Single File
+### Change detection in a single file
 
 Let's start off with something trivial: detecting changes in a single file.
 First we need to decide what to store as internal state. Against that internal
 state we shall be comparing the file upon the next scan. One option is to store
 a checksum (e.g. MD5) of the file's content. However, this makes scans rather
-slow, as they have to read the complete content of each file.  This is
+slow, as they have to read the complete contents of each file.  This is
 unfortunate as today's file collections often contain many large files that
 rarely ever change (e.g. audio and video files).
 
@@ -215,9 +216,12 @@ several reasons:
     and some applications do so.
   * mtime might not be updated if a power failure happens during write.
   * mtime updates might be delayed for writes made via a memory mapping.
-  * Many filesystems store mtimes with second granularity. This means that if
-    the file was updated after we scanned it but in the same second, we wouldn't
-    notice it during next scan.
+  * While most modern file systems store mtimes with at least microsecond
+    granularity, some older file systems store mtimes with only second
+    granularity.  This means that if the file was updated after we scanned it
+    but in the same second, we wouldn't notice it during next scan. We can
+    compensate for this in several ways: for example if we get an mtime that
+    is less than two seconds in the past, we wait for a while and retry.
 
 Most of these problems should be fairly unlikely or infrequent and the massive
 success of `rsync` attests that this approach is good enough for most practical
@@ -226,10 +230,13 @@ uses.
 Moreover, size and mtime can be acquired atomically while computing checksums
 might give inconsistent results if the file is being concurrently updated.
 We can still store checksums for consistency checking purposes  but it is
-sufficient to update them only when the (size, mtime) tuple changes and we
-will have to deal with the race conditions. This will be discussed later.
+sufficient to update them only when the (size, mtime) tuple changes. And we
+do not even have to recalculate the checksums every time a file is changed.
+Instead, we can simply remember that a file has pending changes and delay
+actual checksum calculations to make them less frequent.
+This is discussed in [@sec:working].
 
-### Scanning a Single Directory                     {#sec:singledir}
+### Scanning a single directory                     {#sec:singledir}
 
 For a single directory, we can simply store a mapping from names to (size, mtime)
 tuples as the state.
@@ -241,7 +248,7 @@ directory entries (each consisting of a name, inode number and usually
 the type of the inode). When the contents of the directory do not fit into
 the buffer, subsequent calls return additional entries.
 
-We can hit a race condition in several places when entries in the directory are
+We can hit a race condition in several places if entries in the directory are
 renamed during scanning:
 
   * Between two calls to `getdents`. The directory inode is locked for the
@@ -254,18 +261,27 @@ renamed during scanning:
 
     This can be mitigated by using a buffer large enough to hold all the
     directory entries. This could be achieved for example by doubling the
-    buffer size until we managed to read everything in one go. However,
+    buffer size until we manage to read everything in one go. However,
     trying to do this for large directories could keep the inode locked
-    for unnecesary long. A better solution will be proposed later using
-    a combination of online and offline change detection.
+    for unnecesary long.
 
   * Between `getdents` and `lstat` (or similar). Because `getdents` returns
     only limited information about a file, we need to call `lstat` for each
     entry to find size and mtime. Between those to calls, the entry might
     get renamed (causing `lstat` to fail) or replaced (causing it to return
     a different inode). Both cases can be detected (the latter by comparing
-    inode number from `lstat` with inode number from `getdents`) and the
-    scan can be retried after a random delay.
+    inode number from `lstat` with inode number from `getdents`, which is
+    unreliable because inode numbers can be reused).
+
+However, instead of problematic workarounds for specific issues, there is one
+simple solution to *all* directory-reading race conditions. The key is that directories have
+mtime, just like files. The directory mtime is, as you would expect, the last time a directory
+entry was added to or removed from the directory. The solution is now obvious:
+we remember the directory's mtime at the beginning of the scan. After we have
+enumerated all the directory entries, we once again look at the mtime. If it is
+different, the directory has been concurrently updated and the scan results
+may be unreliable. In such case, we simply throw them away and retry after a delay.
+The same caveats about mtime granularity apply as were mentioned above for files.
 
 There is one other problem: when a file is renamed, it would be detected as
 deletion of the original file and creation of a new on with the same content (or
@@ -273,15 +289,21 @@ just similar, if it was both renamed and changed between scans). Unless the data
 synchonization algorithm can reuse blocks from other files for delta transfers,
 this would force retransmission of the whole file.
 
+The problem gets even more serious when renaming a directory, perhaps one
+containing a large number of files and subdirectories. Unless we can detect
+that this is the same directory, we would have to recreate the whole subtree
+under the new name on the target side instead of just renaming the directory
+that is already there.
+
 To correctly detect renames, we would need a way to detect that a name we
 currently encountered during the scan refers an inode that we know from earlier
 scans, perhaps under a different name. For this to be possible, we need to be
 able to assign some kind of unique identifiers to inodes that are stable,
 non-reusable and independent of their names.
 
-### Identifying Inodes
+### Identifying inodes
 
-#### Inode Numbers
+#### Inode numbers
 
 The first natural candidate for an inode identifier is of course the inode
 number. But inode numbers can be reused when an inode is deleted and a new one
@@ -306,7 +328,7 @@ Thus at least on some filesystems, including ext4, one of the most common
 filesystems in the Linux world, inode numbers cannot be used to reliably match
 inodes between offline scans.  Is there a better way?
 
-#### Enter Filehandles
+#### Enter filehandles
 
 There is an alternative way of identifying inodes, created originally for the
 purposes of the Network File System (NFS) protocol. NFS was designed to preserve
@@ -328,10 +350,11 @@ to use a handle referring to an inode that has been deleted, the server must be
 able to detect that and return a "stale handle" (`ESTALE`) error.
 
 A file handle should be treated simply as an opaque identfier, its structure
-depends on the filesystem used on the server side. Most filesystems create
+depends on the filesystem type used on the server side. Many file systems
+(including ext4) create
 file handles composed of the inode number and a so-called \D{generation number},
 which is increased every time an inode number is reused. Such pair should
-be unique for the lifetime of the filesystem.
+be unique for the lifetime of the file system.
 
 Not all filesystems support file handles. Those that do are called
 \D{exportable} (*exporting* is the traditional term for sharing a filesystem
@@ -350,12 +373,14 @@ rather unusual ways. \cite{fhandle_man}
 
 Being non-reusable, file handles seem like a good candidate for persistent inode
 identifiers. However, there is a different problem. The NFS specification does
-not guarantee that the same handle for a given inode every time. \cite[p. 21]{nfs-rfc}
+not guarantee that the same handle is returned for a given inode every time. \cite[p. 21]{nfs-rfc}
 I.e., it is possible for multiple different handles to refer to the same inode,
 which prevents us from simply comparing handles as strings or using them as
-lookup keys in internal databases.
+lookup keys in internal databases. Most common file systems (including ext4
+and btrfs) have stable file handles. However, just for the fun of it, we will
+show a solution for the general case.
 
-#### The Best of Both Worlds
+#### The best of both worlds
 
 We propose a reliable inode identification scheme that combines the strengths
 of both inode numbers (stability) and file handles (non-reusability). It works
@@ -388,6 +413,42 @@ common practice for users to have NFS-mounted home directories in schools
 and larger organizations. This issue should certainly be given attention
 in further works but it seems likely that it will require kernel changes.
 
+#### Extended attributes
+
+Another possibility is to use POSIX extended attributes (xattrs) \cite{xattr} to help identity
+inodes. Extended attributes are arbitrary key-value pairs that can be
+attached to inodes (if the underlying file system supports them; most moder
+Linux file systems do). Because they are attached to inodes, they are
+preserved across renames.
+
+This offers a simple strategy: store a unique inode identifier
+as an extended attribute. Whenever we encounter an inode without this
+attribute, we assign it a new randomly-generated identifier and store
+it into the xattr.
+
+However, we consider the handle-based scheme superior for several reasons:
+
+  * Not all file systems support extended attributes (probably less
+    than support file handles).
+  * The size of extended attributes is often severely limited. For example
+    on ext4, all the extended attributes of an inode must fit into a single
+    filesystem block (usually 4 kilobytes). While our identifier would be
+    rather small, we cannot predict how much data other programs store
+    into extended attributes.
+  * We use file handles for several other purposes, such as a race-free way
+    of accessing inodes and to speed up directory tree scans (as described
+    in [@sec:recheck].
+  * Some programs copy all extended attributes while copying a file. This
+    would create two inodes with the same identifier, which is asking for
+    trouble. We could partially work around this by also storing the inode
+    number in the xattr and trusting its value only when it matches the
+    real inode number.
+  * Extended attributes cannot be attached to symlinks. This seems harmless
+    at the first glance, we do not need rename detection for symlinks
+    because they are cheap to delete and recreate. However, rename detection
+    on symlinks will prove crucial in a surprising fashion when implementing
+    a feature called *placeholder inodes* ([@sec:placeholder]).
+
 ### Scanning a Directory Tree                               {#sec:dirtree}
 
 #### Internal state
@@ -395,8 +456,8 @@ in further works but it seems likely that it will require kernel changes.
 When scanning directory trees, we definitely do not want to store the full path
 to each object. If we did and a large directory was renamed, we would need to
 individually update the path of every file in its subtree\dots and probably
-transfer all those updates during synchronization, unless additional tricks are
-used.
+transfer all those updates during synchronization, unless additional tricks were
+involved.
 
 Instead, we will choose a tree-like representation that closely mimics the
 underlying filesystem structure. The internal state preserved between scans
@@ -409,7 +470,7 @@ consists of:
         by inode number possible.
       - Last modification time, for files also size.
   * For every directory inode, a list of its children as a mapping from
-    basenames to IIDs.
+    names (without path) to IIDs.
 
 This way, when a large directory is renamed, it suffices to remove one directory
 entry from the original parent and add one directory entry to the new parent,
@@ -419,17 +480,19 @@ requiring a constant number of updates to the underlying store.
 
 Scanning large directory trees is slow, especially on rotational drives like
 hard disks. The main contributor to this is seek times. We are accessing
-inodes, each several hundred bytes in size, in essentialy random order. If
-you wanted to get the worst possible performance from a hard disk, you probably
-could not do much better than this.
+inodes, each several hundred bytes in size, in essentialy random order. That
+is actually not true as file systems contain many optimizations that do a good
+job at clustering related inodes together but these are far from perfect and
+seek times are still a major concern.
 
-This problem is aggravated by the structure of the ext4 filesystem. In ext4,
+This problem is aggravated by the structure of the ext4 file system. In ext4,
 the disk is split into equally-sized regions called \D{block groups}. Each
 block group contains both inode metadata and data blocks for a set of files.
 \cite{blockgroups}
 
 ![ext4 block group layout (not to scale)\label{bg}](img/blockgroup.pdf){#fig:bg}
 
+[@Fig:bg] shows the on-disk block group layout.
 The dark bands represent areas storing inodes, the white are data blocks. Also
 note that this picture is quite out of scale. The default block group size
 is 2$\,$GB,[^flexbg] so on a 1$\,$TB partition there will be approximately 500
@@ -442,7 +505,7 @@ for the whole flex group stored at its beginning.
 
 This layout improves performance for most of the normal filesystem access
 patterns (by improving locality between metadata and data blocks). However,
-scanning the whole filesystem is not one of them.
+scanning the whole file system is not one of them.
 
 Not all filesystems are like this. For example, NTFS keeps all file metadata in
 one contiguous region called the Master File Table (MFT) at the beginning of the
@@ -466,13 +529,14 @@ We can for example do the scan using a breadth-first search with a priority
 queue ordered by inode number. We know the inode number from `getdents`
 without `stat`-ing the inode itself 
 
-##### Faster rescans
+##### Faster rescans                                    {#sec:recheck}
 
 For the second and further scans, we can do even better. Linux stores a
 modification time for directories as well as for files. The modification time
 of a directory is the last time a direct child is added to it or removed from
-it. Thus we can simply iterate over the directory records from our database
-in inode nubmer order. We open each of them using the saved file handle, which
+it. Thus we can simply iterate over the all inode records in our database,
+files and directories alike, in inode number order. We open each of them using
+the saved file handle, which
 encodes the inode number and thus the location of the inode on disk.
 We can then `fstat` the opened directory, which directly accesses this location,
 without any path resolution steps that would require the kernel to look up
@@ -482,25 +546,95 @@ This way, we access only inode metadata blocks (the gray areas in [@fig:bg]) and
 not directory content blocks, which are stored in the white data sections. This
 further reduces seeking.
 
-Order    Access by       Time [s]
--------  -------------  ---------
-inode    path                74.7
-         handle              82.2
-scan     path               108.3
-         handle             254.9
-find     path               281.0
-random   path               694.8
--------  -------------  ---------
+<!--
+Order    Access by      Time (all inodes)   Time (directories only)
+-------  -------------  ------------------  ------------------------
+inode    handle         1:40                0:23       
+         path           1:56                1:52       
+scan     handle         4:41                0:41       
+         path           4:23                4:21
+find     path           4:41          
+random   handle         > 1 h               > 1h
+         path           > 1 h               > 1h
+-------  -------------  ------------------  ------------------------
 
-: Scan times for different access strategies. {#tbl:scantimes}
+: Scan times (mm:ss) for different access strategies. {#tbl:scantimes}
+-->
 
-[@Tbl:scantimes] shows times (in minutes and seconds) necessary to `lstat` all
-the inodes on a filesystem for different access orders (*scan* is the order
-of a depth-first traversal that visits children in the order returned by
-`getdents`, *inode* is ascending inode number order and *random* is a completely
-random shuffle of all the inodes) and different access methods (by path or
-by handle). The measurement was performed on a real-world filesystem with
-approximately 2 million inodes, $10\,\%$ of which were directories.
+\hypertarget{tbl:scantimes}{}
+\begin{longtable}[]{@{}llllll@{}}
+\caption{\label{tbl:scantimes}Scan times (mm:ss) and throughputs (inodes/s) for different access
+strategies. }\tabularnewline
+\toprule
+Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Directories only}\tabularnewline
+& & time & inodes/s & time & inodes/s \tabularnewline
+\midrule
+\endfirsthead
+\toprule
+Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Directories only}\tabularnewline
+& & time & inodes/s & time & inodes/s \tabularnewline
+\midrule
+\endhead
+inode &  handle &  1:40 &  \:1.4$\,$M  & 0:23 & 530$\,$k \tabularnewline
+      &  path   &  1:56 &  \:1.2$\,$M  & 1:52 & 110$\,$k \tabularnewline
+scan  &  handle &  4:41 &  490$\,$k  & 0:41 & 300$\,$k \tabularnewline
+      &  path   &  4:23 &  530$\,$k  & 4:21 & \:\:47$\,$k \tabularnewline
+find  &  path   &  4:41 &  490$\,$k  &      &   \tabularnewline
+random & handle & \textgreater{} 1 h && \textgreater{} 1h&\tabularnewline
+& path & \textgreater{} 1 h & & \textgreater{} 1h &\tabularnewline
+\bottomrule
+\end{longtable}
+
+
+[@Tbl:scantimes] shows times necessary to `lstat` all
+the inodes on a filesystem for different access orders and access methods
+on a real-world ext4 filesystem with approximately 2 million inodes
+($10\,\%$ of which were directories).
+
+The experiment has been performed as follows: first, we performed a normal
+depth-first scan of the directory tree to obtain a flat list of all the inodes
+in the file system containing inode number, file handle and full path of each inode
+(this is similar to what Filoco metadata would look like, only we use paths
+instead of parent/child relationships).
+
+Then we the complete inode list was loaded into memory and sorted in one of
+the following ways:
+
+  - *inode* is ascending inode number order
+  - *scan* is the original order in which we encountered the inodes during
+    the recursive scan (that is, DFS order where children were visited in
+    the order returned by `getdents`)
+  - *random* is a completely random shuffle of the inode list
+
+Then we clear the filesystem cache (using the `sysctl -w vm.drop_caches=3` command)
+to prevent it from unpredictably distorting the results.
+Only after that, we start measuring time. Then we try to `stat` all the inodes
+in the given order in one of two ways:
+
+  - *handle* means an `open_by_handle_at` syscall on the saved handle
+    followed by an `fstat`.
+  - *path* means simply `lstat`-ing the saved path, which triggers the path
+    resolution process in the kernel.
+
+For comparison, there is a row labelled *find*, which shows how long usual
+DFS traversal of the directory tree (i.e. intermixed `getdents` and `lstat`
+calls) would take (as performed by the `find -size +1` command; the `-size`
+argument is needed to force `stat`-ing every inode).
+
+The results confirm the following prediction:
+
+  * Accessing a precomputed flat list of inodes is faster than recursively
+    scanning directory contents using `getdents` (about three times).
+  * Accessing inodes in inode number order is faster than in the DFS discovery
+    order (by about $30\,\%$).
+
+However, some results are contrary to our expectations. Namely:
+
+  * Regardless of order, accessing inodes using paths is faster than using
+    file handle. This is very unexpected as resolving a path requires looking
+    up directory entries in the parent directories' data block, while a file
+    handle directly encodes the on-disk location of the inode. We have not
+    any explanation for this phenomenon.
 
 We experimented with several other techniques, for example massively
 parallelizing the scan in the hope that the kernel and/or hard disk controller
@@ -508,8 +642,7 @@ will order the requests themselves in an optimal fashion. However, most of
 these attempts yielded results worse than a naive scan so they would not be
 discussed further.
 
-
-#### Race Conditions
+#### Race Conditions                        {#sec:tree-races}
 
 Tree scanning presents numerous opportunities for race conditions. Some were
 already discussed in [@sec:singledir]. But the most serious threat is a file
@@ -541,14 +674,25 @@ changes: synchronization tools, indexers and similar.
 
 When using inotify, a process must first create a \D{watch list} -- a list of inodes
 that it wants to monitor. Inodes are added to the watch list using paths (file descriptors
-may be added using the `/proc/self/fd` trick) but once added, the kernel keeps direct
+may be added using the `/proc/self/fd` trick) but once added, the kernel keeps a direct
 reference to the inode.
 
 Inotify supports reporting all the usual filesystem events (writes, creations, renames,
 unlink) and several less usual ones (opens, closes and reads). Events are generated
-for all inodes on the watch list and (in case of directories) their direct children.
+when anything happens to any inode on the watch list or a direct child of a directory
+on the watch list.
 This holds true even for events that do not touch the directory inode, like writes
 to a file inside a watched directory.
+
+However, the watching is not recursive. Thus if we want to watch a whole directory
+tree, we need add all the directories in the tree to the watch list one by one.
+In the previous section, we have shown an efficient way of doing that. Namely we
+load a list of directory inodes from our internal database (presumably using an
+index on the inode type column to make this fast), get a file descriptor to each
+using `open_by_handle_at` and add the corresponding inode to the inotify watch list.
+As per [@tbl:scantimes], this can be up to ten times faster than a naive recursive
+directory traversal (but we need to add some time for reading our database). But
+even 30 seconds of 100\% disk load on every startup is rather inconvenient.
 
 Inotify assigns a unique cookie called the \D{watch descriptor} to every inode on the
 watch list. This watch descriptor is then returned with events concerning this inode.
@@ -558,66 +702,6 @@ can simply keep a mapping from watch descriptors to IIDs or some other kind of i
 identifiers. This also gives us access to the file handle if a race-free access to
 the affected inode is necessary.
 
-However, there is one catch: inotify monitoring is not recursive. If you wish
-to watch a directory tree, you have to add every single directory in the tree
-to the watch list. For an inode to be added to the watch list, it must be first
-looked up and read from the disk. This makes creating the watch list comparably
-slow to a rescan and allows us to use the same optimizations as for scans to
-make it a little bit less slow.
-
-At the first glance, an additional advantage may be seen in the fact that we
-need access only directories and can simply skip over all file inodes.
-However, when directories make up $10\,\%$ of the inodes[^numdirs], accessing
-all directories in inode order is not even 2 times faster than a full scan.
-
-[^numdirs]: This number is approximately true for all the various filesystems
-I have access to, both system and data, destop and server.
-
-And if we scan only directories, a file might be modified during the watch setup
-phase (if it takes over a minute, it is not unlikely) and we would miss such change.
-Therefore it is probably better to do a full rescan when setting up inotify watches.
-We can do both the rescan and watch creation in a single pass over the inodes, as
-shown in alg. \ref{alg:inotify-watch}, a slight variation on \textsc{Recheck-All}.
-
-<!-- http://tex.stackexchange.com/questions/1375/what-is-a-good-package-for-displaying-algorithms-->
-
-\begin{algorithm}
-  \caption{Inotify watch creation with recheck
-    \label{alg:inotify-watch}}
-  \begin{algorithmic}[1]
-    \ForEach{record \I{rec} in inode database, ordered by inode number}
-        \State \I{fd} $\gets$ \verb+open_handle+(\I{rec}$.$\I{handle})
-        \IIf{it fails} skip the inode and remove it from database
-        \State Add \I{fd} to the inotify watch list
-        \State \textsc{Recheck}(\I{rec}, \I{fd})
-    \End
-  \end{algorithmic}
-\end{algorithm}
-
-And the two mechanisms beautifully complement each other: the scanning tells us
-about any changes that ocurred before we encountered a given dirctory, while inotify
-tell us of any changes that happened during or after scanning that directory. This
-way we have also solved the race condition mentioned in [@sec:dirtree]. If a file
-is renamed during scan from a not-yet-scanned  directory to an already-scanned directory,
-we will get an inotify event for the target directory as we have already
-added it to the watch list.
-
-When an event is received, it is fairly trivial to update our internal structures
-accordingly.
-
-Thus the first online monitoring API turned up to be more useful for offline monitoring,
-whose problems it can fix with negligible slowdown.
-
-However, for regular long-term monitoring, the requirement of a minute-long scan with
-100$\,\%$ disk load (during which your system will be rather slow) will be unpleasant.
-We do not want to end up like many Windows users who have to wait a minute or more after
-login for all the accumulated autostart programs to load before their system becomes
-usable.
-
-An alternative would be to perform the scan slowly, at low priority, perhaps even with
-short pauses. However, that would increase the time before we start synchronizing files
-to perhaps 5 minutes.
-
 Another consideration is that the inotify watch list and the watched inodes (which cannot
 be dropped from the inode cache because they are referenced by the watch list) consume
 non-swappable kernel memory. This would not be a problem for most users as the amount
@@ -625,7 +709,43 @@ is approximately 0.5$\,$kB per directory. It would be a problem for extremely la
 trees (hundreds of thousands of directories and more) but in such cases the scan times
 would probably be the more serious issue.
 
+Inotify can efficiently be used as an anti-race-condition aid during offline scans (as
+discussed in [@sec:tree-races]). Because we
+have to visit all the directories during the scan anyway, we can add inotify watches to
+them at little extra cost (except for memory usage). To prevent all kinds of races, we
+have to first add the inotify watch for a directory and only then read its contents.
+
+
 ### Fanotify
+
+Fanotify \cite{fanotify} is the newest change notification API added to the Linux kernel.
+Like inotify, it supports watching individual inodes but unlike inotify, it also supports
+watching whole mount points. Note that this is not the same as watching one filesystem
+volume because (1) one volume may be accessible via several mountpoints, (2) a mount point
+may show only a part of a volume's directory tree. For example, after invoking the commands:
+
+    mount -t ext4 /dev/sdb1 /mnt/hdd
+    mount --bind /mnt/hdd/music/bob /home/bob/music
+
+\noindent
+there are two mount points:
+
+  * `/mnt/hdd`, which shows the whole directory tree of the file system on  the `/dev/sdb1`
+    device
+  * `/home/bob/music`, which shows the `/music/bob` subtree of the file system on `/dev/sdb1`
+
+When you create a fanotify watch for the `/home/bob/music` mount point, you get events for
+filesystem changes made via this mount point. For example, if some program writes to
+`/mnt/hdd/music/bob/test.mp3`, you will not get an event, even though the file
+`/home/bob/music/test.mp3` now has different content than before.
+
+This could be (ab)used to make fanotify watch only a given directory subtree. For example
+when you issue the command `mount --bind /home/alice /home/alice`, the directory `/home/alice`
+becomes a separate mount point (although it contains the same files as before), which can be
+separately watched by fanotify. However, this has a drawback: it is not allowed to move files
+between mount points, even if the two mount points refer to the same filesystem volume.
+
+Because
 
 ### The `FAN_MODIFY_DIR` Kernel Patch
 

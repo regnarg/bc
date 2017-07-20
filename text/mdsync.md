@@ -312,7 +312,7 @@ the same as a Merkle tree \cite{mtree}, only it is a generic DAG instead of a tr
 to prevent anyone from rewriting history. This is exactly the same thing that git does
 with commits. \cite{gitobj}
 
-### Working versions
+### Working versions                                    {#sec:working}
 
 Creating new FCVs is expensive. Not only additional versions increase metadata storage
 requirements but we also have to compute a hash of the file's content, which is slow
@@ -345,7 +345,7 @@ timestamp because the FCV is created upon the first of a series of local modific
 While a last modified timestamp would be a nice information to have in the metadata, we
 consider this a small price to pay for less version bloat.
 
-### Placeholder inodes
+### Placeholder inodes                      {#sec:placeholder}
 
 One of the major goals of Filoco is to present the user with an unified view of their
 data, no matter where they are physically stored. This means first and foremost
