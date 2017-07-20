@@ -333,7 +333,7 @@ class Scanner:
         """A coroutine that consumes the scan queue and runs scan() appropriately."""
         log.debug("scan_worker started")
         while True:
-            with self.db:
+            with self.db.ensure_transaction():
                 for i in range(500):
                     if self.scan_queue.empty():
                         self.queue_unscanned()
@@ -382,7 +382,8 @@ class Scanner:
         self.init()
         if self.watch_mode == 'none':
             if self.scan_task:
-                #with self.db: # XXX
+                self.db.execute('pragma journal_mode=NONE')
+                with self.db.ensure_transaction(): # XXX
                     self.loop.run_until_complete(self.scan_task)
         else:
             self.loop.run_forever()

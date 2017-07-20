@@ -53,7 +53,7 @@ class MDSync(Protocol):
         if self.store.sync_mode == 'serial':
             kw['serial'] = obj['serial']
         kind = obj['kind']
-        with self.db:
+        with self.db.ensure_transaction():
             if kind in ('flv', 'fcv'):
                 kw.update({'_is_head': 1})
                 self.db.update('fobs', 'id=?', kw['fob'], **{'_new_%ss'%kind: time.time()})
@@ -83,7 +83,7 @@ class MDSync(Protocol):
     async def run(self):
         await self.prepare()
         to_send = await self.compute_diff()
-        #with self.db:
+        #with self.db.ensure_transaction():
         if 1:
             await self.exchange_objects(to_send)
 
