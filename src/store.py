@@ -76,8 +76,7 @@ class SyncTree:
 
     def add(self, id, kind, **kw):
         with self.db.ensure_transaction():
-            bin_id = codecs.decode(id, 'hex')
-            self.db.insert('syncables', _on_conflict='ignore', id=id, kind=kind, tree_key=self.hash_pos(bin_id), **kw)
+            self.db.insert('syncables', _on_conflict='ignore', id=id, kind=kind, tree_key=self.hash_pos(id), **kw)
             if self.db.changes():
                 self._update_synctree(id)
 
@@ -104,13 +103,12 @@ class SyncTree:
 
         Call from within a transaction!"""
 
-        bin_id = codecs.decode(id, 'hex')
-        pos = self.hash_pos(bin_id)
-        chk = self.hash_chk(bin_id)
+        pos = self.hash_pos(id)
+        chk = self.hash_chk(id)
         while pos:
-            self.db.execute('insert or ignore into synctree values (?,?,?)', pos, bin_id, chk)
+            self.db.execute('insert or ignore into synctree values (?,?,?)', pos, id, chk)
             if not self.db.changes():
-                self.db.execute('update synctree set xor=binxor(xor,?), chxor=binxor(chxor,?) where pos=?', bin_id, chk, pos)
+                self.db.execute('update synctree set xor=binxor(xor,?), chxor=binxor(chxor,?) where pos=?', id, chk, pos)
                 self.db.execute('delete from synctree where pos=? and xor=zeroblob(%d)'%(self.ID_BITS//8), pos)
             pos >>= self.BITS_PER_LEVEL
 
