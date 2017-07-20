@@ -26,7 +26,7 @@ def str_to_handle(s):
 
 def rescan(*, order='orig', use_handles=False, only_dir=False):
     with open('inos.json') as fd:
-        data = json.load(fd)
+        data = [ (ino, str_to_handle(handle), type, path) for (ino,handle,type,path) in  json.load(fd) ]
     check_call(['sysctl', '-w', 'vm.drop_caches=3'])
     if order == 'ino':
         data.sort()
@@ -37,13 +37,14 @@ def rescan(*, order='orig', use_handles=False, only_dir=False):
     else:
         raise ValueError
 
+    if only_dir: data = [ itm for itm in data if itm[2] != 'd' ]
+
     errors = 0
     start = clock_gettime(CLOCK_MONOTONIC)
     for ino, handle, type, fn in data:
-        if only_dir and type!= 'd' and type != "b'd'": continue
         try:
             if use_handles:
-                fd = open_by_handle_at(root_fd, str_to_handle(handle), os.O_PATH)
+                fd = open_by_handle_at(root_fd, handle, os.O_PATH)
                 st = os.fstat(fd)
                 os.close(fd)
             else:
@@ -54,8 +55,8 @@ def rescan(*, order='orig', use_handles=False, only_dir=False):
     return end-start, errors
 
 
-for only_dir in [True, False]:
-    for order in ['ino', 'orig', 'rand']:
+for order in ['ino', 'orig', 'rand']:
+    for only_dir in [True, False]:
         for use_handles in [False, True]:
             time, errors = rescan(order=order, use_handles=use_handles, only_dir=only_dir)
-            print("%-4s %1d %.1f %d" % (order, use_handles, time, errors))
+            print("%-4s %-4s %-4s %.1f %d" % (order, 'handle' if use_handles else 'path', 'dir' if only_dir else 'all',  time, errors))

@@ -1,55 +1,10 @@
-## tdata (ext4, 2M inodes)
+## tdata -- fixed scanner
 
-ino  0 74.7 0
-ino  1 82.2 0
-orig 0 108.3 0
-orig 1 254.9 0
-rand 0 694.8 0
-
-find -size +1  4:41
-find           4:13
-
-## kerio /home (ext3, 2M inodes)
-
-orig 0 330.6 0
-orig 1 355.5 0
-ino  0 296.0 0
-ino  1 216.0 1
-rand 0 1829.5 0
-
-## kerio /home converted into ext4 (w/ fallocate in inode order, 1731658 inodes)
-
-ino  0 65.5 0
-ino  1 71.8 0
-orig 0 148.8 0
-orig 1 169.7 0
-
-### dirs only (143429 dirs)
-
-ino  0 37.8 0
-ino  1 52.4 0
-orig 0 78.0 0
-orig 1 134.8 0
-
-## kerio /home converted into ext4 (w/ fallocate in inode order, 1731658 inodes)
-## with packed_meta_blocks=1
-
-DIRS:
-ino  0 43.1 0
-ino  1 51.1 0
-orig 0 102.6 0
-orig 1 169.8 0
-rand 0 538.6 0
-rand 1 1704.4 0
-
-ALL:
-ino  0 62.3 0
-ino  1 70.6 0
-orig 0 179.3 0
-
-## reconstructed half of /tdata (1M files)
-
-ino  0 31.1 0
-ino  1 32.9 0
-orig 0 86.2 0
-orig 1 100.3 0
+ino   path    dir  112.0  0
+ino   handle  dir  23.1   0
+ino   path    all  116.5  0
+ino   handle  all  100.2  0
+orig  path    dir  261.8  0
+orig  handle  dir  41.7   0
+orig  path    all  263.5  0
+orig  handle  all  281.5  0
