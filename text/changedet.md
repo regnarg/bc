@@ -621,20 +621,18 @@ DFS traversal of the directory tree (i.e. intermixed `getdents` and `lstat`
 calls) would take (as performed by the `find -size +1` command; the `-size`
 argument is needed to force `stat`-ing every inode).
 
-The results confirm the following prediction:
+The results confirm our predictions:
 
-  * Accessing a precomputed flat list of inodes is faster than recursively
-    scanning directory contents using `getdents` (about three times).
-  * Accessing inodes in inode number order is faster than in the DFS discovery
-    order (by about $30\,\%$).
+  * Accessing inodes in inode number order is faster (about two times)
+    than accessing them in DFS order.
+  * Accessing inodes using handles is faster than using paths.
+    For all inodes the difference is rather slight, for a smaller subset
+    (such as directories only) it can be up to five-fold.
 
-However, some results are contrary to our expectations. Namely:
-
-  * Regardless of order, accessing inodes using paths is faster than using
-    file handle. This is very unexpected as resolving a path requires looking
-    up directory entries in the parent directories' data block, while a file
-    handle directly encodes the on-disk location of the inode. We have not
-    any explanation for this phenomenon.
+All of this applies to an ext4 or similar file system on a rotational hard
+drive. For btrfs and SSD, the differences will probably be negligible if any.
+The results were produced using scripts in the `experiments/treescan2`
+directory in attachment 1.
 
 We experimented with several other techniques, for example massively
 parallelizing the scan in the hope that the kernel and/or hard disk controller
@@ -705,9 +703,8 @@ the affected inode is necessary.
 Another consideration is that the inotify watch list and the watched inodes (which cannot
 be dropped from the inode cache because they are referenced by the watch list) consume
 non-swappable kernel memory. This would not be a problem for most users as the amount
-is approximately 0.5$\,$kB per directory. It would be a problem for extremely large directory
-trees (hundreds of thousands of directories and more) but in such cases the scan times
-would probably be the more serious issue.
+is approximately 0.5$\,$kB per directory. For our example file system with $200\,000$
+directories, this would constitute $100\,$MB of wasted memory.
 
 Inotify can efficiently be used as an anti-race-condition aid during offline scans (as
 discussed in [@sec:tree-races]). Because we
@@ -745,11 +742,175 @@ becomes a separate mount point (although it contains the same files as before), 
 separately watched by fanotify. However, this has a drawback: it is not allowed to move files
 between mount points, even if the two mount points refer to the same filesystem volume.
 
-Because
+Another interesting property of fanotify is that you get a file descriptor to the affected
+inode along with any event. From it we can determine inode number and file handle and look
+up the corresponding object in our internal database.
 
-### The `FAN_MODIFY_DIR` Kernel Patch
+However, fanotify has two important limitations:
 
+  * Its use requires root permissions (because otherwise there is no easy way for the kernel
+    to determine which events a user should be allowed to see).
+  * More importatnly, it does not report directory-changing events (creates, renames,
+    and unlinks).
 
+### The `FAN_MODIFY_DIR` kernel patch
+
+We have implemented an extension to fanotify that enables it to report directory change
+events. This extension is available as a series of two kernel patches (currently against Linux 4.10, but
+they should apply to any 4.x version with trivial modifications) in the
+`src/fanotify/` directory in attachment 1.
+
+Such an extension is useful not only in context of file synchronization but also
+for example to filesystem indexers.
+
+There are two main reasons why fanotify currently does not support directory events.
+Let's look at how we deal with each of them.
+
+#### Directory event semantics
+
+The first problem is that it is not clear how to represent directory events and
+what semantics should they have in order to be useful.
+
+Inotify reports them in a rather complicated way that involves passing watch
+descriptors of parent directories and string names of their children. Because
+of race condition, by the time you receive the event, these names may already
+refer to a completely different inode than the one the event was about. There are also
+issues with regard to what is or is not guaranteed about ordering of these
+events, especially in cases such as concurrent cross-directory renames. In
+general, inotify directory events are hard to interpret correctly.
+
+In contrast, the fanotify event interface is beautifully simple. You get a
+fixed size structure with one event type, one file descriptor, no need to
+allocate space for any strings and no need to worry about what they mean.
+
+Our solution to this conundrum lies in the filesystem-watching wisdom that we
+have already encountered several times: names are useless (and paths are even
+more useless), inodes and file descriptors are great. So instead of passing any
+names to userspace, we generate a simple event called `FAN_MODIFY_DIR` every
+time the contents of a directory are changed in any way (a directory entry is
+added or removed), i.e. exactly when the directory's mtime would be updated.
+
+As with all fanotify events, you get a file descriptor -- one referring to the modified
+directory, i.e. the parent of the created, renamed or unlinked file. This makes
+directory modification events completely analogous to file modification events.
+In case of a cross-directory rename, you get two `FAN_MODIFY_DIR` events for both the
+old and new parent directory.
+
+This scheme is based on a suggestion made on the Linux kernel mailing list back in 2009.
+\cite{fanotify_dirchange} Since then, nobody has attempted to implement it.
+
+This scheme has one more advantage (pointed out to me by kernel developer Jan Kára in
+personal communication): when there are more events of the same type queued for an inode
+before they are read by userspace, kernel automatically merges them. So for example when
+moving 100 files from one directory to another, you would get only a few events instead
+of 200.
+
+We have expanded this idea into a more general trick. You can actually purposefully stall
+reading fanotify events, to (1) give kernel more chance for merging repeated events,
+(2) read events in larger chunks to reduce number of context switches, even when there
+is a little delay between them. The realization is rather simple, as shown in algorithm
+\ref{alg:fan_delay}.
+
+\begin{algorithm}
+  \caption{fanotify event grouping\label{alg:fan_delay}}
+\begin{algorithmic}[1]
+    \Repeat
+      \State wait 5 seconds
+      \State wait for a fanotify event to be available
+      \State read all pending events into one large buffer and process them
+    \EndRepeat
+\end{algorithmic}
+\end{algorithm}
+
+This has to be done carefully because waiting too long might cause the kernel queue
+to overflow and events to be dropped.
+
+#### Which mount point?
+
+The second problem lies in the fact that fanotify watches are tied to a specific
+mount point. Thus to generate a fanotify event in reaction to a filesystem operation,
+we need to know through which mount point the operation was performed. Two important
+in-kernel structures are relevant to understanding this:
+
+A `struct dentry` represents one directory entry. It contains the following information:
+
+  - A reference the inode to which the directory entry refers (the child)
+  - The name of the entry
+  - A reference to the parent dentry. It really is the parent dentry, not
+    the parent inode; this allows reconstructing full paths by walking the
+    dentry parent chain. However, there can also be so-called *disconnected
+    dentries* that do not know their parent or name, so they should be rather
+    considered to represent an inode than a directory entry. These can be created for example
+    when opening file handles, because in that case the inode is directly accessed
+    without path resolution so its parents cannot be known.
+
+A `struct path`, despite its name, does not represent a string path but rather the result
+of path resolution. It contains references to:
+
+  * The dentry represented by this path.
+  * The mount point to which the original path belongs.
+
+The kernel's open file description structure stores a `struct path` representing the
+path using which the file was opened. This allows, among other things, (1) showing
+full paths of files open by a process by tools such as `lsof` or `ls -l /proc/<pid>/fd`,
+(2) generating correct fanotify events because the mount point is known.
+
+However, most kernel-internal filesystem APIs, including the ones dealing with directory
+changes, operate on inodes and dentries and do not get the mount information contained
+in a `struct path`.
+
+Here is how an `unlink` syscall is currently processed in the Linux
+kernel:
+
+1. The syscall implementation (`SYSCALL_DEFINE1(unlink)` in `fs/namei.c`) gets
+   string path from userspace.
+2. It calls helper function to resolve the path into a `struct path`.
+3. It passes the dentry from the `struct path` to a kernel-internal function
+   `vfs_unlink`.
+4. `vfs_unlink` carries out the operation and generates an inotify event for
+   the parent inode. It does not generate a fanotify event because it does not
+   know the mount point.
+
+The `vfs_unlink` function (and other similar functions like `vfs_rename`) is
+a stable kernel API that is used on many places in the kernel so it is not easy
+to change its signature.
+
+Instead, we opted to generate the fanotify event directly in the syscall code,
+and many other places that call the `vfs_*` functions, for example the in-kernel
+NFS server. Scattering fanotify calls at several places across the kernel is probably
+not a good long-term solution but practically it works.
+
+Our patch has been submitted to the Linux kernel mailing list as a RFC but
+it sparked little interest at the time. \cite{lkml-submit}
+
+### Amir Goldstein's fanotify patches
+
+Another solution to the fanotify directory events problem has appeared recently,
+in parallel with ours. \cite{amir}
+
+Amir Goldstein's patches are a much more comprehensive (and complex) solution
+to the directory event reporting problem. They offer the following features:
+
+  * Report separate fanotify event types for the individual kind of directory
+    entry manipulations (create, rename, unlink).
+  * Optionally report names of the affected directory entries in addition to
+    the parent directory file descriptor. When this flag is disabled, the result
+    is rather similar to our patch.
+  * Allow attaching fanotify watches to filesystem volumes as a whole as opposed
+    to specific mount points.
+  * Allow reporting events about an arbitrary directory subtree of a file system,
+    although this is subject to reliability issues. Specifically, as it filters
+    events by walking dentry parents, it does not report events for disconnected
+    dentries (because the kernel  simply does not know whether they belong to
+    a given subtree).
+    
+The last point seems particularly interesting because this might
+in the future allow file systems to generate fanotify events from within,
+which are not related to any specific mount point. This could be used for
+example by distributed or network file systems to report server-side changes.
+
+<!--
 ### Other Methods
 
 ## Filesystem-Based Change Detection
+-->

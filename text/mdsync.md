@@ -1043,7 +1043,7 @@ Otherwise a different synchronization scheme must be used. For example, we could
 perform a binary search on the sequence numbers to find the longest common prefix
 by comparing corresponding prefix XORs. Then both sides can simply exchange the
 remaining suffixes and merge them into their sequences, updating the neccesary
-prefix XORs. Presumably the error has occured recently so the suffixes than need
+prefix XORs. Presumably the error has occured recently so the suffixes that need
 to be fixed should not be long.
 
 
