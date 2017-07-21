@@ -281,7 +281,7 @@ def main(store, target=None, *, listen:int=None):
     if sub != Path(): raise ArgumentError("Metadata sync must be done on whole store (%s), not a subtree." % st.root_path)
 
     if os.path.isdir(target):
-        target_st, sub = Store.find(store)
+        target_st, sub = Store.find(target)
         if sub != Path(): raise ArgumentError("Metadata sync must be done on whole store (%s), not a subtree." % target_st.root_path)
 
         # We currently push data through a pipe for local sync. This is ugly,
