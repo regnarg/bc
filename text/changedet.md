@@ -562,28 +562,36 @@ random   handle         > 1 h               > 1h
 -->
 
 \hypertarget{tbl:scantimes}{}
-\begin{longtable}[]{@{}llllll@{}}
+\begin{longtable}[]{@{}llllllll@{}}
 \caption{\label{tbl:scantimes}Scan times (mm:ss) and throughputs (inodes/min) for different access
 strategies. }\tabularnewline
 \toprule
-Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Files only}\tabularnewline
-& & time & inodes/min & time & inodes/min \tabularnewline
+Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Files only}& \multicolumn{2}{c}{Dirs only}\tabularnewline
+& & time & inodes/min & time & inodes/min & time & inodes/min\tabularnewline
 \midrule
 \endfirsthead
 \toprule
-Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Files only}\tabularnewline
-& & time & inodes/min & time & inodes/min \tabularnewline
+Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Files only}& \multicolumn{2}{c}{Dirs only}\tabularnewline
+& & time & inodes/min & time & inodes/min & time & inodes/min\tabularnewline
 \midrule
 \endhead
-inode &  handle &  1:40 &  \:1.4$\,$M  & 0:23 & 530$\,$k \tabularnewline
-      &  path   &  1:56 &  \:1.2$\,$M  & 1:52 & 110$\,$k \tabularnewline
-scan  &  handle &  4:41 &  490$\,$k  & 0:41 & 300$\,$k \tabularnewline
-      &  path   &  4:23 &  530$\,$k  & 4:21 & \:\:47$\,$k \tabularnewline
-find  &  path   &  4:41 &  490$\,$k  & 4:27 & \:\:46$\,$k   \tabularnewline
+inode &  handle &  1:40 &  \:1.4$\,$M  & 0:34 &3.5$\,$M   & 1:37 & 125.9$\,$k  \tabularnewline
+      &  path   &  1:56 &  \:1.2$\,$M  & 2:08 &943.5$\,$k & 1:22 & 149.6$\,$k  \tabularnewline
+scan  &  handle &  4:41 &  490$\,$k    & 0:52 &2.3$\,$M   & 4:33 & 44.8$\,$k   \tabularnewline
+      &  path   &  4:23 &  530$\,$k    & 4:36 &438.6$\,$k & 1:56 & 105.1$\,$k  \tabularnewline
+find  &  path   &  4:41 &  490$\,$k    & 4:27 & \:\:46$\,$k  \tabularnewline
 random & handle & \textgreater{} 1 h && \textgreater{} 1h&\tabularnewline
 & path & \textgreater{} 1 h & & \textgreater{} 1h &\tabularnewline
 \bottomrule
 \end{longtable}
+
+
+
+
+
+
+
+
 
 
 [@Tbl:scantimes] shows times necessary to `lstat` all
