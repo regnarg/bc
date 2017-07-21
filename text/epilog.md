@@ -18,11 +18,8 @@ the order they appear in the text:
     A proof of concept implementation of this mechanism has been provided.
 
   * A mechanism for speeding up incrementally scanning a file system for changes
-    about 2 times by accessing inodes using file handles in inode number order,
+    about 2 to 8 times by accessing inodes using file handles in inode number order,
     including experimental measurements.
-
-  * Use of the same mechanism to speed up recursive inotify watch setup up to
-    10 times.
 
   * A patch to the Linux kernel that extends the fanotify change notification interface
     with the ability to report directory modification events (creating, renaming, moving

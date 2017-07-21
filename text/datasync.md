@@ -143,3 +143,31 @@ change some area in the file's header to remove a pointer to some records at the
 end of the file and then physically remove the records at the end, perhaps overwriting
 them with something else. In your copy, the pointer in the header would be still
 present, now pointing to garbage data.
+
+There is probably no way to recover from such situations. The only way to correctly make
+a copy of a file is when it does not change during the copy/transfer process.
+There are two ways this might be achieved: (1) lock the file in some fashion to prevent
+other programs from accessing it, (2) make the copy in a transactional fashion.
+The kind of locking needed for (1) is more or less impossible for locking.
+
+As for (2), we can reuse the oldest trick in our book, namely comparing before/after
+mtimes. First we remember the mtime of the source file, then we perform the copy/transfer
+into a temporary file, then we check the source mtime again. If it has not changed, we
+consider the copy correct, otherwise we start over.
+
+When synchronizing over a network, we can perform
+the complete synchronization protocol reading from the original files, while the receiver
+saves the result into a temporary file. At the end, if the files on neither side changed
+according to mtime comparisons, the parties agree to commit the transaction, otherwise
+they retry the whole protocol again.
+
+A different kind of race condition might occur on the receiver side. Between the moment
+that we decided the original files have not changed and we should commit the transaction
+and the moment we actually replace the target file using an atomic rename, the target file
+might be changed. In this case, we would replace the target file with a consistent
+version but lose some recent changes. With a normal `rename`, this cannot be prevented.
+However, on Linux we can use the extended `renameat2` syscall with the `RENAME_EXCHANGE`
+flag. This causes the kernel to atomically exchange the temporary file with the target
+file. If any concurrent modifications were made during the brief window, they will now
+be available in the location of the temporary file. We could record this as a normal
+version conflict and store both verions of the file.

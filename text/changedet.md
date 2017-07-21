@@ -566,12 +566,12 @@ random   handle         > 1 h               > 1h
 \caption{\label{tbl:scantimes}Scan times (mm:ss) and throughputs (inodes/min) for different access
 strategies. }\tabularnewline
 \toprule
-Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Directories only}\tabularnewline
+Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Files only}\tabularnewline
 & & time & inodes/min & time & inodes/min \tabularnewline
 \midrule
 \endfirsthead
 \toprule
-Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Directories only}\tabularnewline
+Order & Access by & \multicolumn{2}{c}{All inodes} & \multicolumn{2}{c}{Files only}\tabularnewline
 & & time & inodes/min & time & inodes/min \tabularnewline
 \midrule
 \endhead
@@ -625,9 +625,21 @@ The results confirm our predictions:
 
   * Accessing inodes in inode number order is faster (about two times)
     than accessing them in DFS order.
-  * Accessing inodes using handles is faster than using paths.
-    For all inodes the difference is rather slight, for a smaller subset
-    (such as directories only) it can be up to five-fold.
+  * Accessing inodes using handles may be faster than using paths,
+    as shown by the "files only" case.
+
+However, it showed a few rather surprising results:
+
+  * Scanning only directories takes almost as long as scanning all inodes
+    even though there is ten times less of them. Contrarily, scanning
+    only files using handles only is several times faster than scanning
+    only directories, despite there being 9 times as many files as directories.
+    The times remain more or less the same when we leave out the `fstat`
+    and only open the handles.
+    From this we can conjecture that the `open_by_handle` operation 
+    is for some reason significantly slower on diretories than files. Perhaps
+    the kernel performs some additional checks? This would definitely benefit
+    from further investigation.
 
 All of this applies to an ext4 or similar file system on a rotational hard
 drive. For btrfs and SSD, the differences will probably be negligible if any.
@@ -684,13 +696,9 @@ to a file inside a watched directory.
 
 However, the watching is not recursive. Thus if we want to watch a whole directory
 tree, we need add all the directories in the tree to the watch list one by one.
-In the previous section, we have shown an efficient way of doing that. Namely we
-load a list of directory inodes from our internal database (presumably using an
-index on the inode type column to make this fast), get a file descriptor to each
-using `open_by_handle_at` and add the corresponding inode to the inotify watch list.
-As per [@tbl:scantimes], this can be up to ten times faster than a naive recursive
-directory traversal (but we need to add some time for reading our database). But
-even 30 seconds of 100\% disk load on every startup is rather inconvenient.
+Experiments in the previous section have not shown much efficient ways of doing that
+because opening directory inodes, which we now need, is for some reason much slower
+than for files.
 
 Inotify assigns a unique cookie called the \D{watch descriptor} to every inode on the
 watch list. This watch descriptor is then returned with events concerning this inode.

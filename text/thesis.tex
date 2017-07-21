@@ -95,8 +95,8 @@
 % consultant, a person who lent the software, etc.)
 \def\Dedication{%
 
-To Medvěd, my supervisor, a great friend and one of the best teachers I know.
-Someone who has way more answers than one person should. Whenever I encounter
+To Medvěd, my supervisor, a great friend and one of the best teachers I~know.
+Someone who has way more answers than one person should. Whenever I~encounter
 a problem from pretty much any field, the first subconscious impulse usually is:
 ``Let's ask Medvěd, he will figure something out.'' But I learn to resist this
 impulse and instead try to acquire some of the tricks of his trade -- relentless
@@ -118,12 +118,22 @@ bachelor theses and do a lot of other interesting stuff.
 
 % Abstract (recommended length around 80-200 words; this is not a copy of your thesis assignment!)
 \def\Abstract{%
-Abstract.
+  We explore the problem of file synchronization, with the goal of improving
+  on the efficiency, scalability, robustness, flexibility and security of
+  current file synchronization tools. We solve several important subproblems
+  that may help this, especially in the areas of filesystem change detection
+  (both online and offline) and peer-to-peer synchronization of file metadata.
+  We show techniques to make scanning a file system for changes faster and
+  more reliable.
+  We extend the Linux kernel's `fanotify` filesystem change notification API
+  to report more events, especially renames. We present several original solutions
+  to the set reconciliation problem and its variants and apply them to metadata
+  synchronization.
 }
 
 % 3 to 5 keywords (recommended), each enclosed in curly braces
 \def\Keywords{%
-{key} {words}
+  {file synchronization} {set reconciliation} {fanotify}
 }
 
 %% The hyperref package for clickable links in PDF and also for storing
