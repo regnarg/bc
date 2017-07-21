@@ -5,7 +5,6 @@ import logging
 import asyncio
 from subprocess import check_call
 
-import libmount
 from butter.fanotify import *
 from butter.fhandle import *
 
