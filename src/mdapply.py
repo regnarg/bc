@@ -162,10 +162,13 @@ class MDApply:
 
         return ret
 
-    def collect_update_batch(self, start):
+    def collect_update_batch(self, start, force=False):
         with self.db.ensure_transaction():
             self.db.lock_now()
-            fobs = list(self.db.query('select rowid,* from fobs where _new_flvs>0 and rowid>=? order by rowid asc limit ?',
+            if force: cond = ''
+            else: cond = '_new_flvs>0 and '
+            fobs = list(self.db.query('select rowid,* from fobs where %s rowid>=? '
+                                        'order by rowid asc limit ?' % cond,
                             start, self.UPDATE_BATCH_SIZE))
             return self.extend_update_batch(fobs)
 
@@ -285,7 +288,7 @@ class MDApply:
                         logical_name, fob=fob.id, longname=True, try_short=True,
                         inode=task.inode)
                 if Store.is_longname(target_name):
-                    task.rename_to_short = (parent_info, name)
+                    task.rename_to_short = (target_info, target_name)
             else:
                 good_links = self.get_good_links(fob)
                 if not good_links:
@@ -293,12 +296,14 @@ class MDApply:
                                 "Please rescan and run mdapply again.", binhex(fob.id))
                     continue
                 for glink in good_links:
+                    if glink.parent_inode.iid == target_inode.iid and glink.name == logical_name:
+                        continue
                     try_short = (not conflicts) and (glink.short_cand)
                     target_name = self.rename_and_update_links(glink.parent_info, glink.name,
                             target_info, logical_name, fob=fob.id, longname=True, try_short=try_short,
                             inode=glink.inode)
                     if try_short and Store.is_longname(target_name):
-                        task.rename_to_short = (parent_info, name)
+                        task.rename_to_short = (target_info, target_name)
 
     def move_to_shortnames(self, batch):
         for task in batch:
@@ -318,10 +323,10 @@ class MDApply:
             self.db.execute('update fobs set _new_flvs=0 where id=? and _new_flvs=?',
                     task.fob.id, task.new_flv_stamp)
 
-    def perform_one_batch(self, start):
+    def perform_one_batch(self, start, *, force=False):
         with self.db.ensure_transaction():
             self.db.lock_now()
-            batch = self.collect_update_batch(start)
+            batch = self.collect_update_batch(start, force=force)
             if not batch: return None
             self.cleanup_placeholders()
             self.create_new_inodes(batch)
@@ -346,11 +351,11 @@ class MDApply:
         return batch[-1].fob.rowid
 
 
-    def run(self):
+    def run(self, *, force=False):
         start = 0
         while True:
             log.debug("Running batch, start = %d", start)
-            end = self.perform_one_batch(start)
+            end = self.perform_one_batch(start, force=force)
             # We use destructors to automatically close FDs but Python's refcounting apparently
             # is not that reliable. Force a GC to free up unused FDs.
             import gc; gc.collect()
@@ -360,10 +365,10 @@ class MDApply:
 
 
 
-def main(store):
+def main(store, *, force : ('f') = False):
     st, sub = Store.find(store)
     if sub != Path(): raise ArgumentError("Metadata apply must be done on whole store (%s), not a subtree." % st.root_path)
     mdapply = MDApply(st)
-    mdapply.run()
+    mdapply.run(force=force)
 
 run(main)
