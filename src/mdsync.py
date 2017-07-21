@@ -45,8 +45,8 @@ class MDSync(Protocol):
         del obj['id']
         if self.store.sync_mode == 'serial':
             to_send['serial'] = row['serial']
-        if D_SENDOBJ:
-            log.debug('sending object %s', json.dumps(to_send))
+        #if D_SENDOBJ:
+        #    log.debug('sending object %s', json.dumps(to_send))
         self.send_cbor(to_send)
         await self.out_stream.drain()
 
@@ -192,16 +192,21 @@ class TreeMDSync(MDSync):
         send_subtrees, send_objects = what
         rows = []
         for oid in send_objects:
-            rows.append(self.db.query_first("select insert_order, id, kind from syncables where id=?", oid))
+            rows.append(self.db.query_first("select insert_order, id, kind, origin_idx from syncables where id=?", oid))
         for vert in send_subtrees:
             minkey, maxkey = self.synctree.subtree_key_range(vert)
-            rows += self.db.query("select insert_order, id, kind from syncables where tree_key >= ? and tree_key < ?",
+            if D_SYNCTREE: log.debug('key range: %d - %d', minkey, maxkey)
+            rows += self.db.query("select insert_order, id, kind, origin_idx from syncables where tree_key >= ? and tree_key < ?",
                                     minkey, maxkey)
         # We need to send objects in insertion order, so that other side can
         # recreate them without violating foreign key constraints
         rows.sort(key=lambda row: row['insert_order'])
         for row in rows:
-            await self.send_by_syncable_row(row)
+            try:
+                await self.send_by_syncable_row(row)
+            except:
+                import traceback
+                traceback.print_exc()
         self.send_sized(b'')
         await self.out_stream.drain()
 

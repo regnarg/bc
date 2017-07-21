@@ -1,4 +1,6 @@
 apsw
 cbor
 jinja2
+clize
+pyopenssl
 ../3rd/butter
