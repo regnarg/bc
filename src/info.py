@@ -3,6 +3,7 @@
 from utils import *
 from store import *
 from clize import run
+import codecs
 
 def ohex(v):
     if v is None: return '-'
@@ -15,10 +16,14 @@ class InfoPrinter:
         self.db = store.db
         self.indent = 0
 
-    def filename_info(self, filename):
+    def find_inode(self, filename):
         fd = FD.open(self.store.root_path / filename, os.O_PATH|os.O_NOFOLLOW)
         info = InodeInfo(self.store, fd=fd)
         inode = self.store.find_inode(info)
+        return inode, info
+
+    def filename_info(self, filename):
+        inode, info = self.find_inode(filename)
         st = info.get_stat()
         self.print("Store root: %s" % self.store.root_path)
         self.print("Inode number: %d" % st.st_ino)
@@ -57,10 +62,13 @@ class InfoPrinter:
         self.print("Insert order:", row.insert_order)
         self.print("Created: ", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(row.created)))
 
-        data = self.db.query_first("select * from %s where id=?"%Store.TYPE2TABLE[row.kind], id)
+        row.update(self.db.query_first("select * from %s where id=?"%Store.TYPE2TABLE[row.kind], id))
 
         if row.kind == 'fob':
-            self.print("Type:", data.type)
+            self.print("Type:", row.type)
+
+        if row.kind in ('flv', 'fcv'):
+            self.print("Parent vers:", ', '.join( binhex(v) for v in  split_idlist(row.parent_vers)))
 
     def print(self, *a, **kw):
         print(" "*self.indent, end="")
@@ -72,17 +80,38 @@ class InfoPrinter:
         try: yield
         finally: self.indent -= 4
 
+    def print_graph(self, fob_id, kind, cur=None):
+        print("digraph G {")
+        if cur: print('"%s" [color=red];'%binhex(cur))
+        for row in self.db.query('select * from %ss where fob=?'%kind, fob_id):
+            id = binhex(row.id)
+            for par in split_idlist(row.parent_vers):
+                print('"%s" -> "%s";' % (id, binhex(par)))
+        print("}")
+
 import re
 ID_RE = re.compile(r'^[0-9a-fA-F]{16,}$')
 
-def main(filename_or_syncable, id=None):
+def main(filename, id=None, *, flv_graph=False, fcv_graph=False):
     if id is not None:
         store = Store(filename)
+        id = codecs.decode(id, 'hex')
         printer = InfoPrinter(store)
-        printer.print_syncable(id)
+        if flv_graph:
+            printer.print_graph(id, 'flv')
+        elif fcv_graph:
+            printer.print_graph(id, 'fcv')
+        else:
+            printer.print_syncable(id)
     else:
-        store, path = Store.find(filename_or_syncable)
+        store, path = Store.find(filename)
         printer = InfoPrinter(store)
-        printer.filename_info(path)
+        inode, info = printer.find_inode(path)
+        if flv_graph:
+            printer.print_graph(inode.fob, 'flv', inode.flv)
+        elif fcv_graph:
+            printer.print_graph(inode.fob, 'fcv', inode.fcv)
+        else:
+            printer.filename_info(path)
 
 run(main)
