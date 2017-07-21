@@ -4,6 +4,10 @@ from utils import *
 from store import *
 from clize import run
 
+def ohex(v):
+    if v is None: return '-'
+    else: return binhex(v)
+
 
 class InfoPrinter:
     def __init__(self, store):
@@ -19,9 +23,9 @@ class InfoPrinter:
         self.print("Store root: %s" % self.store.root_path)
         self.print("Inode number: %d" % st.st_ino)
         handle = info.get_handle()
-        self.print("File handle: %d:%s" % (handle.type, binhex(handle.handle)))
+        self.print("File handle: %d:%s" % (handle.type, ohex(handle.handle)))
         if inode:
-            self.print("DB handle:   %d:%s" % (inode.handle_type, binhex(inode.handle)))
+            self.print("DB handle:   %d:%s" % (inode.handle_type, ohex(inode.handle)))
         self.print("Stat tuple: ", (st.st_size, st.st_mtime))
         if inode:
             self.print("DB   tuple: ", (inode.size, inode.mtime))
@@ -29,21 +33,21 @@ class InfoPrinter:
             self.print("No inode record")
             return
         self.print("Type:", inode.type)
-        self.print("IID: ", binhex(inode.iid))
-        self.print("FOB: ", binhex(inode.fob))
+        self.print("IID: ", ohex(inode.iid))
+        self.print("FOB: ", ohex(inode.fob))
         if inode.fob:
             with self.indented(): self.print_syncable(inode.fob, skip_type=True)
-        self.print("FLV: ", binhex(inode.flv))
+        self.print("FLV: ", ohex(inode.flv))
         if inode.flv:
             with self.indented(): self.print_syncable(inode.flv, skip_type=True)
-        self.print("FCV: ", binhex(inode.fcv))
+        self.print("FCV: ", ohex(inode.fcv))
         if inode.fcv:
             with self.indented(): self.print_syncable(inode.fcv, skip_type=True)
 
     def print_syncable(self, id, *, skip_id=True, skip_type=False):
         row = self.db.query_first('select * from syncables where id=?', id)
         if not skip_id:
-            self.print("ID:", binhex(id))
+            self.print("ID:", ohex(id))
         if not skip_type:
             self.print("Kind:", row.kind)
         origin = self.store.get_store_id(row.origin_idx)
@@ -71,7 +75,7 @@ class InfoPrinter:
 import re
 ID_RE = re.compile(r'^[0-9a-fA-F]{16,}$')
 
-def main(filename, id=None):
+def main(filename_or_syncable, id=None):
     if id is not None:
         store = Store(filename)
         printer = InfoPrinter(store)
