@@ -77,19 +77,19 @@ not covered by any old blocks, these can be of varying sizes from a few bytes to
 file).
 
 The cannonical implementation of the rsync algorithm is a part of the `rsync`
-program.  However, `rsync` has its own protocol and semantics for establishing
-connection, authentication dealing with multiple files, dealing with file
+program \cite{rsync_man}.  However, `rsync` has its own protocol and semantics for establishing
+connections, authentication, dealing with multiple files, dealing with file
 paths, etc., that do not fit well into our design. A more promising
 implementation of the algorithm is available in the `librsync` library. \cite{librsync}
 This
 library implements only the pure rsync algorithm and leaves all the other
-aspects, including the logistics of network communication a filesystem
-interaction, up to the application, which makes it very flexible.
+aspects, including the logistics of network communication and filesystem
+access, up to the application, which makes it very flexible.
 
 It is the `librsync` library that was intended to be used for implementing content
 synchronization in Filoco, although the implementation was never finished.
 
-## Set Reconciliation-Based Methods
+## Set Reconciliation Based Methods
 
 We might notice that the structure of block-based synchronization problem is
 rather similar to the set reconciliation problem: both sides have some blocks
@@ -118,3 +118,28 @@ The use of set reconciliation and content-dependent block splitting for file
 synchronization has been thoroughly examined by Marco Gentili in his
 bachelor thesis. \cite{gentili}
 
+## Filesystem Access
+
+A general-purpose file synchronizer, possibly running in the background, has
+to deal with the file system being concurrently changed. For metadata changes
+(creates, renames and deletes), this has been already tackled in chapter 1.
+
+However, file contents can also change, and do so in two ways. Some programs
+write to directly to the destination file, while others first create a temporary
+file, write the new version to it and then replace the original with an
+atomic `rename`.
+
+When a file is changed while it is being synchronized, the synchronization will
+probably not give meaningful results. This is not only because of race conditions
+involved in the synchronization algorithms (for example we compute a checksum
+of a block and then the block changes). Even a simple whole-file copy is riddled with
+possible race conditions. For example, after you have copied half the file, someone
+may concurrently make one change and the beginning and then one change at the end.
+Your copy will contain the unchanged beginning and the changed end, a version of the
+file that was never present in the original.
+
+This is far less far-fetched than it may seem. For example, a program might first
+change some area in the file's header to remove a pointer to some records at the
+end of the file and then physically remove the records at the end, perhaps overwriting
+them with something else. In your copy, the pointer in the header would be still
+present, now pointing to garbage data.
