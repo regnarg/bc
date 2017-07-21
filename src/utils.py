@@ -1,6 +1,6 @@
 import sys, os, time, stat
 import uuid
-import asyncio
+import asyncio, socket
 import binascii
 from weakref import ref as WeakRef
 
@@ -509,5 +509,10 @@ class Protocol:
         self.out_stream.write_eof()
 
     async def prepare(self):
-        self.in_stream = await aio_read_pipe(self.in_file)
-        self.out_stream = await aio_write_pipe(self.out_file)
+        if self.in_file is self.out_file and isinstance(self.in_file, socket.socket):
+            self.in_stream, self.out_stream = await asyncio.open_connection(sock=self.in_file, loop=asyncio.get_event_loop())
+        elif isinstance(self.in_file, asyncio.StreamReader) and isinstance(self.out_file, asyncio.StreamWriter):
+            self.in_stream, self.out_stream = self.in_file, self.out_file
+        else:
+            self.in_stream = await aio_read_pipe(self.in_file)
+            self.out_stream = await aio_write_pipe(self.out_file)

@@ -478,6 +478,5 @@ class Store:
         return cls.LONGNAME_SEPARATOR in name
 
 
-
 def stat_tuple(st):
     return {'mtime': st.st_mtime, 'size': st.st_size, 'ino': st.st_ino}

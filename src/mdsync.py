@@ -7,6 +7,8 @@ from utils import *
 from store import *
 import struct
 import cbor, json
+import socket
+import multiprocessing
 
 init_debug(['synctree', 'sendobj'])
 
@@ -241,13 +243,73 @@ class SerialMDSync(MDSync):
         await self.shutdown()
 
 
+def main(store, target=None, *, listen:int=None):
+    """
+    :param store: the local store path
+    :param target: the synchronization target: either another local directory, an ip:port or '-' for stdio.
+    :param listen: start server on given port instead
+    """
 
-def main(store):
+    if listen and target:
+        raise ArgumentError("--listen cannot be specified with a target")
+    elif listen:
+        procs = []
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', listen))
+        sock.listen(5)
+        log.info("Listening on %d", listen)
+
+        def server_process(sock):
+            st, sub = Store.find(store)
+            if sub != Path(): raise ArgumentError("Metadata sync must be done on whole store (%s), not a subtree." % st.root_path)
+            mdsync = MDSync(store=st, file=sock)
+            asyncio.get_event_loop().run_until_complete(mdsync.run())
+
+        while True:
+            client, addr = sock.accept()
+
+            log.info("Client connected from %s", addr)
+            #server_process(client)
+            proc = multiprocessing.Process(target=server_process, args=(client,))
+            proc.start()
+            client.close() # the new process has the socket, we must close it for EOF to work
+            procs.append(proc)
+
     # .buffer is for binary stdio
     st, sub = Store.find(store)
     if sub != Path(): raise ArgumentError("Metadata sync must be done on whole store (%s), not a subtree." % st.root_path)
-    mdsync = MDSync(store=st, file=(sys.stdin.buffer, sys.stdout.buffer))
-    asyncio.get_event_loop().run_until_complete(mdsync.run())
+
+    if os.path.isdir(target):
+        target_st, sub = Store.find(store)
+        if sub != Path(): raise ArgumentError("Metadata sync must be done on whole store (%s), not a subtree." % target_st.root_path)
+
+        # We currently push data through a pipe for local sync. This is ugly,
+        # could be changed with some minor work.
+        #ab_r, ab_w = os.pipe()
+        #ba_r, ba_w = os.pipe()
+        sock1, sock2 = socket.socketpair(socket.AF_UNIX)
+
+        mdsync = MDSync(store=st, file=sock1)
+        mdsync2 = MDSync(store=target_st, file=sock2)
+        task = asyncio.wait([mdsync.run(), mdsync2.run()],
+                                return_when=asyncio.FIRST_EXCEPTION)
+        asyncio.get_event_loop().run_until_complete(task)
+        return
+    elif target == '-':
+        mdsync = MDSync(store=st, file=(sys.stdin.buffer, sys.stdout.buffer))
+        asyncio.get_event_loop().run_until_complete(mdsync.run())
+    elif ':' in target:
+        ip,port = target.split(':')
+        log.info('Connecting to %s', target)
+        rd,wr = asyncio.get_event_loop().run_until_complete(asyncio.open_connection(ip, int(port)))
+        log.info('Connected to %s, starting sync', target)
+        mdsync = MDSync(store=st, file=(rd,wr))
+        asyncio.get_event_loop().run_until_complete(mdsync.run())
+    else:
+        raise ArgumentError("Invalid target (see --help)")
+
+
 
 
 if __name__ == '__main__':
