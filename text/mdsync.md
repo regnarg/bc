@@ -62,7 +62,7 @@ centralized metadata contains two important pieces of information:
   * Data checksum. This allows to detect media failure or tampering and when
     detected, use another replica if available.
 
-### Detailed metadata structure
+### Detailed metadata structure                     {#sec:objects}
 
 Now we shall examine the structure of the globally replicated metadata in more detail.
 Metadata is modelled
