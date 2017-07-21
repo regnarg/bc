@@ -206,6 +206,11 @@ class SqliteWrapper(object):
             self.execute("update lock_dummy set dummy=1 where 0=0")
             self.trans_local.locked = True
 
+    def clear_cache(self):
+        csize = self.query_first('pragma cache_size', _assoc=False)[0]
+        self.execute('pragma cache_size = -1') # temporarily limit to one kilobyte
+        self.execute('pragma cache_size = %d' % csize)
+
 def fdscandir(fd):
     """Read the contents of a directory identified by file descriptor `fd`."""
     return os.scandir("/proc/self/fd/%d" % fd)

@@ -224,7 +224,7 @@ class InodeInfo:
 class Store:
     root_fd = None
     meta_fd = None
-    SQLITE_CACHE_MB = 256
+    SQLITE_CACHE_MB = 512
     TYPE2TABLE = {'fob': 'fobs', 'fcv': 'fcvs', 'flv': 'flvs'}
     # Files whose dara is not currently stored in this store are represented by symlinks
     # with a fake nonexistent target. We call these links *placeholders*.

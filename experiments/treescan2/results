@@ -1,10 +1,11 @@
 ## tdata -- fixed scanner
 
-ino   path    dir  112.0  0
 ino   handle  dir  23.1   0
-ino   path    all  116.5  0
-ino   handle  all  100.2  0
-orig  path    dir  261.8  0
+ino   path    dir  112.0  0
 orig  handle  dir  41.7   0
-orig  path    all  263.5  0
+orig  path    dir  261.8  0
+
+ino   handle  all  100.2  0
+ino   path    all  116.5  0
 orig  handle  all  281.5  0
+orig  path    all  263.5  0

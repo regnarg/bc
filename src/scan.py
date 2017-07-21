@@ -72,6 +72,7 @@ class Scanner:
         self.recursive = recursive
         self.scan_task = None
         self.from_notify = False
+        self.total_scanned = 0
         if self.start_path != Path() and not self.recursive:
             raise ValueError("Scanning a specific subtree is only supported with -r")
 
@@ -334,7 +335,7 @@ class Scanner:
         log.debug("scan_worker started")
         while True:
             with self.db.ensure_transaction():
-                for i in range(500):
+                for i in range(50000):
                     if self.scan_queue.empty():
                         self.queue_unscanned()
                     if self.scan_queue.empty():
@@ -342,8 +343,14 @@ class Scanner:
                     sr = await self.scan_queue.get()
                     if D_QUEUE: log.debug('Popped %r', sr)
                     self.process_sr(sr)
+                    self.total_scanned += 1
+                    if self.total_scanned % 10000 == 0:
+                        log.info("Scanned %d items", self.total_scanned)
                     # If the queue is long (e.g. during a full rescan), we need to give
                     # the event loop a chance to run.
+                else:
+                    log.debug("Finished complete scan batch, clearing cache")
+                    #self.db.clear_cache()
                 if self.scan_queue.empty():
                     break
             await asyncio.sleep(0) # https://github.com/python/asyncio/issues/284
@@ -383,8 +390,9 @@ class Scanner:
         if self.watch_mode == 'none':
             if self.scan_task:
                 #self.db.execute('pragma journal_mode=OFF')
+                self.db.execute('pragma cache_spill=OFF')
                 #with self.db.ensure_transaction(): # XXX
-                    self.loop.run_until_complete(self.scan_task)
+                self.loop.run_until_complete(self.scan_task)
         else:
             self.loop.run_forever()
 
