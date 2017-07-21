@@ -437,6 +437,8 @@ class Store:
             parent = self.db.query_first('select s.origin_idx as origin_idx, v.content_hash as content_hash from fcvs v join syncables s on s.id=v.id where v.id=?', parent_vers[0])
             if parent.origin_idx == 0 and parent.content_hash is None:
                 return parent_vers[0]
+        for par in parent_vers:
+            self.db.execute('update fcvs set _is_head=0 where id=?', par)
         id = self.add_syncable(None, 'fcv', content_hash=None, parent_vers=b''.join(parent_vers), fob=fob, _is_head=1)
         return id
 
@@ -447,6 +449,8 @@ class Store:
             parent = self.db.query_first('select * from flvs where id=?', parent_vers[0])
             if parent.parent_fob == parent_fob and parent.name == name:
                 return parent.id
+        for par in parent_vers:
+            self.db.execute('update flvs set _is_head=0 where id=?', par)
         id = self.add_syncable(None, 'flv', parent_vers=b''.join(parent_vers),
                                 fob=fob, parent_fob=parent_fob, name=name, _is_head=1)
         return id

@@ -85,6 +85,9 @@ class InfoPrinter:
         if cur: print('"%s" [color=red];'%binhex(cur))
         for row in self.db.query('select * from %ss where fob=?'%kind, fob_id):
             id = binhex(row.id)
+            lbl = "%s [%s/%s]" % (id, binhex(row.parent_fob), row.name)
+            if row._is_head: lbl += " [head]"
+            print('"%s" [label="%s"];' % (id,lbl))
             for par in split_idlist(row.parent_vers):
                 print('"%s" -> "%s";' % (id, binhex(par)))
         print("}")

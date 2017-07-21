@@ -377,6 +377,7 @@ class FD:
 
 import codecs
 def binhex(b):
+    if b is None: return None
     return codecs.encode(b, 'hex').decode('ascii')
 
 def binxor(a,b):

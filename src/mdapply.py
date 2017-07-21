@@ -62,7 +62,7 @@ class MDApply:
         assert flvs
         if len(flvs) > 1:
             # TODO: translate parent_fob+name into full path for nicer UI
-            log.warn('Name conflict for FOB %s; names (using first):\n%s', fob_id, '\n'.join(
+            log.warn('Name conflict for FOB %s; names (using first):\n%s', binhex(fob_id), '\n'.join(
                 '%s/%s'%(flv.parent_fob, flv.name) for flv in flvs))
         flv = flvs[0]
         return flv
@@ -97,7 +97,11 @@ class MDApply:
     def get_pigeonhole_conflicts(self, flv):
         """Get a list of FLV that are pigeonhole-conflicting with this one.
         (i.e., different FOBs claiming the same name)."""
-        return list(self.db.query("select * from flvs where _is_head=1 and parent_fob=? and name=? and fob!=?",
+        if flv.parent_fob is None: # null != null in sql, must handle separately
+            return list(self.db.query("select * from flvs where _is_head=1 and parent_fob is null and name=? and fob!=?",
+                        flv.name, flv.fob))
+        else:
+            return list(self.db.query("select * from flvs where _is_head=1 and parent_fob=? and name=? and fob!=?",
                         flv.parent_fob, flv.name, flv.fob))
 
     def extend_update_batch(self, fobs):
@@ -280,14 +284,14 @@ class MDApply:
             conflicts = self.get_pigeonhole_conflicts(task.flv)
             if conflicts:
                 log.info("Location %s/%s has a pigeonhole conflict. Keeping all files with longnames.",
-                        task.flv.parent_fob, task.flv.name)
+                        binhex(task.flv.parent_fob), task.flv.name)
 
             if task.src_name:
                 try_short = (not conflicts)
                 target_name = self.rename_and_update_links(task.src_dfd, task.src_name, target_info,
                         logical_name, fob=fob.id, longname=True, try_short=True,
                         inode=task.inode)
-                if Store.is_longname(target_name):
+                if try_short and Store.is_longname(target_name):
                     task.rename_to_short = (target_info, target_name)
             else:
                 good_links = self.get_good_links(fob)
@@ -304,6 +308,7 @@ class MDApply:
                             inode=glink.inode)
                     if try_short and Store.is_longname(target_name):
                         task.rename_to_short = (target_info, target_name)
+                    self.db.execute('update inodes set flv=? where ino=?', task.flv.id, glink.inode.ino)
 
     def move_to_shortnames(self, batch):
         for task in batch:
