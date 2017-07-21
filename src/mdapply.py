@@ -24,6 +24,7 @@ class UpdateTask:
         self.src_dirfs = None
         self.new_flv_stamp = -1
         self.new_links = []
+        self.rename_to_short = None
 
     def get_parent_inode(self):
         if self.parent_inode is not None:
@@ -199,13 +200,70 @@ class MDApply:
                 task.inode = new_inode
                 task.info = new_info
 
-    def rename_to_longname(self, src_dfd, src_name, dst_dfd, dst_name, fob):
-        for idx in range(1, 1000):
-            target_name = "%s.FL-%s-%s" % (dst_name, binhex(fob), idx)
+    def rename_to_longname(self, src_dfd, src_name, dst_dfd, dst_name, fob, *, try_short=False):
+        for idx in range(0 if try_short else 1, 1000):
+            target_name = "%s.FL-%s-%s" % (dst_name, binhex(fob), idx) if idx else dst_name
             try: renameat2(+src_dfd, src_name, +dst_dfd, target_name, RENAME_NOREPLACE)
             except FileExistsError: continue
             else: return target_name
         raise FileExistsError()
+
+    def rename_and_update_links(self, src_info, src_name, dst_info, dst_name, *,
+                                flags=0, longname=False, fob=None, try_short=False,
+                                inode=None):
+        """Rename a directory entry and update the `links` table accordingly."""
+        if isinstance(src_info, (FD, int)):  src_fd = src_info
+        else: src_fd = src_info.get_fd()
+        dst_fd = dst_info.get_fd()
+        if longname:
+            target_name = self.rename_to_longname(src_fd, src_name, dst_fd, dst_name,
+                                                    fob=fob, try_short=try_short)
+        else:
+            renameat2(src_fd, src_name, dst_fd, dst_name, flags)
+            target_name = dst_name
+        # If the links table was not up to date, we might have renamed a different inode.
+        # This does not matter because on next scan, we would consider the different
+        # inode under the target name to be a replace a handle it accordingly (preserve
+        # FOB), the same as if we first rescanned to fix links (which would detect the
+        # same inode replace, only under the original name) and then called this function.
+        # We simply perform the same rename in both filesystem and model, even though
+        # they can affect different inodes.
+        if isinstance(src_info, InodeInfo):
+            self.db.execute('update or replace links set parent=?, name=? where parent=? and name=?',
+                dst_info.get_ino(), target_name, src_info.get_ino(), src_name)
+        # If the original link is missing or this is a new inode, we have to create
+        # a fresh link.
+        if inode and not (isinstance(src_info, InodeInfo) or self.db.changes()):
+            self.db.execute('insert into links (parent,name,ino) values (?,?,?)',
+                    dst_info.get_ino(), target_name, inode.ino)
+        return target_name
+
+    def get_good_links(self, fob):
+        inodes = self.get_fob_inodes(fob.id)
+        # This part is tricky: we want to find all links to all inodes tied to this FOB.
+        # There will usually be only one inode (exept for conflicts) and one link (except
+        # for race conditions, incomplete scans and other very unusual circumstances).
+        # But we should deal with those.
+        good_links = []
+        num_shorts = 0
+        for inode, info in inodes:
+            ino = info.get_ino()
+            links = list(self.db.query('select rowid,* from links where ino=?', inode.ino))
+            for link in links:
+                parent_inode = self.db.query_first('select * from inodes where ino=?', link.parent)
+                parent_info = self.check_inode(parent_inode)
+                if parent_info is None: continue
+                try: check_fd = FD.open(link.name, os.O_PATH|os.O_NOFOLLOW, dir_fd=parent_info.fd)
+                except FileNotFoundError: continue
+                was_short = not Store.is_longname(link.name)
+                rec = AttrDict(parent_inode=parent_inode, parent_info=parent_info, name=link.name,
+                                inode=inode, info=info, short_cand=False, was_short=was_short)
+                if not Store.is_longname(link.name):
+                    num_shorts += 1
+                good_links.append(rec)
+        for glink in good_links:
+            glink.short_cand = len(good_links) == 1 or (glink.was_short and num_shorts == 1)
+        return good_links
 
     def move_to_longnames(self, batch):
         for task in batch:
@@ -215,71 +273,44 @@ class MDApply:
             if target_info is None:
                 log.warning("Target inode not found for FOB %s. Skipping.", binhex(fob.id))
                 continue
-            new_links = []
-            if task.src_name:
-                target_name = self.rename_to_longname(task.src_dfd, task.src_name, target_info.fd, logical_name, fob=fob.id)
-                new_links.append((target_info, target_name, True))
-            else:
-                inodes = self.get_fob_inodes(fob.id)
-                # This part is tricky: we want to find all links to all inodes tied to this FOB.
-                # There will usually be only one inode (exept for conflicts) and one link (except
-                # for race conditions, incomplete scans and other very unusual circumstances).
-                # But we should deal with those.
-                good_links = []
-                for inode, info in inodes:
-                    ino = info.get_ino()
-                    links = list(self.db.query('select rowid,* from links where ino=?', inode.ino))
-                    for link in links:
-                        parent_inode = self.db.query_first('select * from inodes where ino=?', link.parent)
-                        parent_info = self.check_inode(parent_inode)
-                        if parent_info is None: continue
-                        try: check_fd = FD.open(link.name, os.O_PATH|os.O_NOFOLLOW, dir_fd=parent_info.fd)
-                        except FileNotFoundError: continue
-                        check_info = InodeInfo(self.store, fd=check_fd)
-                        if check_info is None: continue
-                        check_ino = check_info.get_ino()
-                        if check_ino != ino:
-                            continue
-                        good_links.append((parent_inode, parent_info, link.name, inode, info, link.rowid))
-                if not good_links:
-                    log.warning("No good links found for FOB %s, not renaming. Please rescan and run mdapply again.", binhex(fob.id))
-                    continue
-                for parent_inode, parent_info, name, inode, info, link_rowid in good_links:
-                    target_name = self.rename_to_longname(parent_info.fd, name, target_info.fd, logical_name, fob=fob.id)
-                    new_fd = FD.open(target_name, os.O_PATH|os.O_NOFOLLOW, dir_fd=target_info.fd)
-                    was_short = Store.LONGNAME_SEPARATOR not in name
-                    new_links.append((target_info, target_name, was_short))
-            task.new_links = new_links
 
-    def move_to_shortnames(self, batch):
-        for task in batch:
-            new_links = task.new_links
-            # If we renamed more links, we must now decide which one to promote to a shortname.
-            #   * If there is a pigeonhole conflict, none.
-            #   * If there only one, we take that one.
-            #   * If there is only one that originally had a shortname, we take that.
-            #   * Otherwise we leave all with longnames.
             conflicts = self.get_pigeonhole_conflicts(task.flv)
             if conflicts:
                 log.info("Location %s/%s has a pigeonhole conflict. Keeping all files with longnames.",
                         task.flv.parent_fob, task.flv.name)
-            elected = None
-            if len(new_links) == 1:
-                elected = new_links[0]
+
+            if task.src_name:
+                try_short = (not conflicts)
+                target_name = self.rename_and_update_links(task.src_dfd, task.src_name, target_info,
+                        logical_name, fob=fob.id, longname=True, try_short=True,
+                        inode=task.inode)
+                if Store.is_longname(target_name):
+                    task.rename_to_short = (parent_info, name)
             else:
-                originally_short = [ x for x in new_links if x[2] ]
-                if len(originally_short) == 1:
-                    elected = originally_short[0]
-            if elected is None:
-                log.warning("Cannot determine which inode/link for FOB %s (%s/%s) to promote to shortname. Keeping all with longnames.",
-                            task.fob.id, task.flv.parent_fob, task.flv.name)
-                continue
-            parent_info, name, _ = elected
-            try:
-                renameat2(+parent_info.fd, name, +parent_info.fd, name.split(Store.LONGNAME_SEPARATOR)[0], RENAME_NOREPLACE)
-            except FileExistsError:
-                log.warning("Cannot rename %s/%s to shortname, something is in the way.", binhex(task.flv.parent_fob), name)
-                continue
+                good_links = self.get_good_links(fob)
+                if not good_links:
+                    log.warning("No good links found for FOB %s, not renaming. "
+                                "Please rescan and run mdapply again.", binhex(fob.id))
+                    continue
+                for glink in good_links:
+                    try_short = (not conflicts) and (glink.short_cand)
+                    target_name = self.rename_and_update_links(glink.parent_info, glink.name,
+                            target_info, logical_name, fob=fob.id, longname=True, try_short=try_short,
+                            inode=glink.inode)
+                    if try_short and Store.is_longname(target_name):
+                        task.rename_to_short = (parent_info, name)
+
+    def move_to_shortnames(self, batch):
+        for task in batch:
+            if task.rename_to_short:
+                parent_info, name = task.rename_to_short
+                short_name = name.split(Store.LONGNAME_SEPARATOR)[0]
+                try:
+                    self.rename_and_update_links(parent_info, name, parent_info, short_name,
+                            flags=RENAME_NOREPLACE)
+                except FileExistsError:
+                    log.warning("Cannot rename %s/%s to shortname, something is in the way.",
+                                    binhex(task.flv.parent_fob), name)
 
     def mark_as_updated(self, batch):
         for task in batch:

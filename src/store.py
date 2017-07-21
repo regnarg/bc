@@ -214,7 +214,7 @@ class InodeInfo:
     def __repr__(self):
         attrs = ['fd', 'handle', 'ino', 'iid']
         def attrval(n):
-            v = getattr(self,attr)
+            v = getattr(self,n)
             if n == 'iid': v = binhex(v)
             return v
 
@@ -473,6 +473,10 @@ class Store:
             raise KeyError(idx)
         self.store_id_cache[idx] = id = row['id']
         return id
+    @classmethod
+    def is_longname(cls, name):
+        return cls.LONGNAME_SEPARATOR in name
+
 
 
 def stat_tuple(st):
