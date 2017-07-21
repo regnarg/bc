@@ -1,0 +1,18 @@
+\documentclass[12pt,a4paper]{report}
+\usepackage[a-2u]{pdfx}
+\usepackage[utf8]{inputenc}
+\usepackage[czech]{babel}
+\usepackage{lmodern}
+
+\begin{document}
+V práci zkoumáme problém synchronizace souborů s cílem zlepšení efektivity,
+škálovatelnosti, robustnosti, flexibility a bezpečnosti současných synchronizačních
+nástrojů. Vyřešíme několik podstatných podproblémů, které tomuto mohou pomoci, zejména
+v oblasti sledování změn souborového systému (online i offline) a peer-to-peer
+synchronizace souborových metadat. Ukážeme techniky pro rychlejší a spolehlivější
+hledání změn v souborových systémech. Rozšíříme \texttt{fanotify}, rozhraní linuxového
+jádra pro oznamování změn v souborovém systému, tak, aby dokázalo oznamovat více druhů
+událostí, zejména přejmenování souborů. Představíme originální řešení několika variant
+problému set reconciliation (synchronizace množin) a aplikujeme je na synchronizaci
+metadat.
+\end{document}

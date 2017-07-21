@@ -1,4 +1,4 @@
-all: thesis.pdf
+all: thesis.pdf abstract-en.pdf abstract-cz.pdf
 export TEXINPUTS=./:
 
 img/%.pdf: img/%.asy
@@ -15,6 +15,11 @@ thesis.pdf: thesis.tex $(wildcard *.tex) $(subst .md,.tex,$(wildcard *.md)) \
 	#bibtex thesis
 	biber thesis || true
 	pdflatex --interaction=nonstopmode $< || true
+	pdflatex --interaction=nonstopmode $<
+
+abstract-en.pdf: abstract-en.tex
+	pdflatex --interaction=nonstopmode $<
+abstract-cz.pdf: abstract-cz.tex
 	pdflatex --interaction=nonstopmode $<
 
 clean:

@@ -1,0 +1,18 @@
+\documentclass[12pt,a4paper]{report}
+\usepackage[a-2u]{pdfx}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{lmodern}
+
+\begin{document}
+We explore the problem of file synchronization, with the goal of improving on
+the efficiency, scalability, robustness, flexibility and security of current
+file synchronization tools. We solve several important subproblems that may
+help this, especially in the areas of filesystem change detection (both
+online and offline) and peer-to-peer synchronization of file metadata.  We
+show techniques to make scanning a file system for changes faster and more
+reliable.  We extend the Linux kernel's `fanotify` filesystem change
+notification API to report more events, especially renames. We present
+several original solutions to the set reconciliation problem and its variants
+and apply them to metadata synchronization.
+\end{document}
